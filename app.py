@@ -307,11 +307,9 @@ def tela_etapa1():
                 )
 
         st.write("")
-        col_esq, col_meio, col_dir = st.columns([1, 2, 1])
-        with col_meio:
-            st.markdown("**Etapa 2 — CSV do SCC**")
-            st.caption("Cole a lista no SCC, exporte e suba o CSV aqui.")
-            arquivo_csv = st.file_uploader("CSV exportado do SCC", type=["csv"], key="csv_scc")
+        st.markdown("**Etapa 2 — CSV do SCC**")
+        st.caption("Cole a lista no SCC, exporte e suba o CSV aqui.")
+        arquivo_csv = st.file_uploader("CSV exportado do SCC", type=["csv"], key="csv_scc")
 
         # Primeiro pedaço de verdade da Etapa 2: só a parte de manter a
         # base de DAs (quem é DMNZ) em dia. O resto (State Finalizador
@@ -324,13 +322,11 @@ def tela_etapa1():
         # já cria ele - não precisa criar nada na mão antes.
         if arquivo_csv is not None:
             if not secrets_configurados():
-                col_esq2, col_meio2, col_dir2 = st.columns([1, 2, 1])
-                with col_meio2:
-                    st.warning(
-                        "A base de DAs ainda não está configurada pra salvar no GitHub "
-                        "(falta o secret `github` no Streamlit Cloud - token + repositório). "
-                        "Até isso ser configurado, essa parte não funciona."
-                    )
+                st.warning(
+                    "A base de DAs ainda não está configurada pra salvar no GitHub "
+                    "(falta o secret `github` no Streamlit Cloud - token + repositório). "
+                    "Até isso ser configurado, essa parte não funciona."
+                )
             else:
                 try:
                     linhas_csv = le_csv_scc(arquivo_csv)
@@ -343,13 +339,11 @@ def tela_etapa1():
                     das_dia = extrai_das_do_dia(linhas_csv)
 
                     if not das_dia:
-                        col_esq2b, col_meio2b, col_dir2b = st.columns([1, 2, 1])
-                        with col_meio2b:
-                            st.info(
-                                "Nenhum motorista de verdade apareceu nesse CSV (só leituras "
-                                "de sistema/suporte, tipo LastMileRoutePlanner). Nada pra "
-                                "classificar."
-                            )
+                        st.info(
+                            "Nenhum motorista de verdade apareceu nesse CSV (só leituras "
+                            "de sistema/suporte, tipo LastMileRoutePlanner). Nada pra "
+                            "classificar."
+                        )
                     else:
                         try:
                             texto_base, sha_base = le_arquivo(CAMINHO_BASE_DAS)
@@ -366,105 +360,103 @@ def tela_etapa1():
                             1 for n in das_dia if base_dict.get(normaliza_nome(n)) == "DMNZ"
                         )
 
-                        col_esq3, col_meio3, col_dir3 = st.columns([1, 2, 1])
-                        with col_meio3:
-                            st.markdown("**Base de DAs (quem é DMNZ)**")
+                        st.markdown("**Base de DAs (quem é DMNZ)**")
+                        st.caption(
+                            f"Lida direto do repositório — {len(base_bruta)} DA(s) "
+                            "cadastrado(s) no total."
+                            if base_bruta
+                            else "Base ainda vazia no repositório — é a primeira vez."
+                        )
+                        st.write(
+                            f"**{len(das_dia)} motorista(s) diferentes rodaram hoje** "
+                            f"— {len(das_dia) - len(desconhecidos)} já cadastrado(s) "
+                            f"({qtd_dmnz} como DMNZ)."
+                        )
+
+                        if not desconhecidos:
+                            st.success(
+                                "Todos os motoristas de hoje já estão cadastrados na base."
+                            )
+                            das_revisados = True
+                        else:
+                            escolhidos = st.pills(
+                                f"{len(desconhecidos)} motorista(s) ainda não "
+                                "cadastrado(s) — quais são DMNZ?",
+                                desconhecidos,
+                                selection_mode="multi",
+                                key="pills_desconhecidos",
+                            )
                             st.caption(
-                                f"Lida direto do repositório — {len(base_bruta)} DA(s) "
-                                "cadastrado(s) no total."
-                                if base_bruta
-                                else "Base ainda vazia no repositório — é a primeira vez."
-                            )
-                            st.write(
-                                f"**{len(das_dia)} motorista(s) diferentes rodaram hoje** "
-                                f"— {len(das_dia) - len(desconhecidos)} já cadastrado(s) "
-                                f"({qtd_dmnz} como DMNZ)."
+                                f"{len(escolhidos)} selecionado(s). Quem não for tocado "
+                                "fica de fora da base — nunca vai ser perguntado de novo "
+                                "sobre esse CSV, mas se tocar sem querer dá pra desmarcar "
+                                "de novo antes de continuar."
                             )
 
-                            if not desconhecidos:
-                                st.success(
-                                    "Todos os motoristas de hoje já estão cadastrados na base."
-                                )
-                                das_revisados = True
-                            else:
-                                escolhidos = st.pills(
-                                    f"{len(desconhecidos)} motorista(s) ainda não "
-                                    "cadastrado(s) — quais são DMNZ?",
-                                    desconhecidos,
-                                    selection_mode="multi",
-                                    key="pills_desconhecidos",
-                                )
-                                st.caption(
-                                    f"{len(escolhidos)} selecionado(s). Quem não for tocado "
-                                    "fica de fora da base — nunca vai ser perguntado de novo "
-                                    "sobre esse CSV, mas se tocar sem querer dá pra desmarcar "
-                                    "de novo antes de continuar."
-                                )
-
-                                nova_base_bruta = None
-                                if escolhidos:
-                                    nova_base_bruta = base_bruta + [
-                                        (nome, "DMNZ") for nome in escolhidos
-                                    ]
-                                    with st.expander(
-                                        f"Prévia da base atualizada "
-                                        f"({len(nova_base_bruta)} DA(s) no total)"
-                                    ):
-                                        st.dataframe(
-                                            [
-                                                {"Nome do DA": n, "DMNZ": c}
-                                                for n, c in nova_base_bruta
-                                            ],
-                                            use_container_width=True,
-                                            hide_index=True,
-                                        )
-
-                                rotulo_continuar = (
-                                    "💾 Salvar e continuar" if escolhidos
-                                    else "➡️ Continuar sem marcar ninguém como DMNZ"
-                                )
-                                if st.button(
-                                    rotulo_continuar,
-                                    key="continuar_base_das",
-                                    use_container_width=True,
+                            nova_base_bruta = None
+                            if escolhidos:
+                                nova_base_bruta = base_bruta + [
+                                    (nome, "DMNZ") for nome in escolhidos
+                                ]
+                                with st.expander(
+                                    f"Prévia da base atualizada "
+                                    f"({len(nova_base_bruta)} DA(s) no total)"
                                 ):
-                                    if nova_base_bruta is None:
-                                        # ninguém marcado - não tem nada novo pra
-                                        # gravar no GitHub, só avança pro próximo
-                                        # passo (quem ficou de fora é tratado como
-                                        # parceiro, igual no desktop)
-                                        st.session_state["das_revisados_para"] = hash_csv
-                                        st.rerun()
-                                    else:
-                                        try:
-                                            salva_arquivo(
-                                                CAMINHO_BASE_DAS,
-                                                gera_csv_base_das(nova_base_bruta),
-                                                sha_base,
-                                                mensagem=(
-                                                    f"Adiciona DA(s) DMNZ: "
-                                                    f"{', '.join(escolhidos)}"
-                                                ),
-                                            )
-                                        except ConflitoDeSalvamento:
-                                            st.error(
-                                                "Alguém salvou a base ao mesmo tempo. Toca "
-                                                "no botão de novo pra tentar com a versão "
-                                                "mais recente."
-                                            )
-                                        except Exception as e:
-                                            st.error(f"Não consegui salvar no GitHub: {e}")
-                                        else:
-                                            st.session_state["das_revisados_para"] = hash_csv
-                                            st.success(
-                                                f"Base atualizada! {len(escolhidos)} "
-                                                "motorista(s) novo(s) salvo(s) como DMNZ."
-                                            )
-                                            st.rerun()
+                                    st.dataframe(
+                                        [
+                                            {"Nome do DA": n, "DMNZ": c}
+                                            for n, c in nova_base_bruta
+                                        ],
+                                        use_container_width=True,
+                                        hide_index=True,
+                                    )
 
-                                das_revisados = (
-                                    st.session_state.get("das_revisados_para") == hash_csv
-                                )
+                            rotulo_continuar = (
+                                "💾 Salvar e continuar" if escolhidos
+                                else "➡️ Continuar sem marcar ninguém como DMNZ"
+                            )
+                            if st.button(
+                                rotulo_continuar,
+                                key="continuar_base_das",
+                                use_container_width=True,
+                            ):
+                                if nova_base_bruta is None:
+                                    # ninguém marcado - não tem nada novo pra
+                                    # gravar no GitHub, só avança pro próximo
+                                    # passo (quem ficou de fora é tratado como
+                                    # parceiro, igual no desktop)
+                                    st.session_state["das_revisados_para"] = hash_csv
+                                    st.rerun()
+                                else:
+                                    try:
+                                        salva_arquivo(
+                                            CAMINHO_BASE_DAS,
+                                            gera_csv_base_das(nova_base_bruta),
+                                            sha_base,
+                                            mensagem=(
+                                                f"Adiciona DA(s) DMNZ: "
+                                                f"{', '.join(escolhidos)}"
+                                            ),
+                                        )
+                                    except ConflitoDeSalvamento:
+                                        st.error(
+                                            "Alguém salvou a base ao mesmo tempo. Toca "
+                                            "no botão de novo pra tentar com a versão "
+                                            "mais recente."
+                                        )
+                                    except Exception as e:
+                                        st.error(f"Não consegui salvar no GitHub: {e}")
+                                    else:
+                                        st.session_state["das_revisados_para"] = hash_csv
+                                        st.success(
+                                            f"Base atualizada! {len(escolhidos)} "
+                                            "motorista(s) novo(s) salvo(s) como DMNZ."
+                                        )
+                                        st.rerun()
+
+                            das_revisados = (
+                                st.session_state.get("das_revisados_para") == hash_csv
+                            )
 
                         # State Finalizador só entra depois que a revisão da
                         # base de DAs foi concluída pra esse CSV - mesma ordem
@@ -486,27 +478,109 @@ def tela_etapa1():
                                     linhas_csv, base_tbr, base_dict, data_hoje_str
                                 )
 
-                                col_esq4, col_meio4, col_dir4 = st.columns([1, 2, 1])
-                                with col_meio4:
-                                    st.markdown("**State Finalizador (por TBR)**")
-                                    st.write(
-                                        f"**{len(resultado['entregues'])} entregue(s)** "
-                                        "(automático) · "
-                                        f"**{len(resultado['auto_em_rota'])} em rota** "
-                                        "(automático, DA de verdade vinculado) · "
-                                        f"**{len(resultado['conhecidos'])} reaproveitado(s)** "
-                                        "do histórico · "
-                                        f"**{len(resultado['pendentes'])} pendente(s)** "
-                                        "de revisão."
-                                    )
+                                st.markdown("**State Finalizador (por TBR)**")
+                                st.write(
+                                    f"**{len(resultado['entregues'])} entregue(s)** "
+                                    "(automático) · "
+                                    f"**{len(resultado['auto_em_rota'])} em rota** "
+                                    "(automático, DA de verdade vinculado) · "
+                                    f"**{len(resultado['conhecidos'])} reaproveitado(s)** "
+                                    "do histórico · "
+                                    f"**{len(resultado['pendentes'])} pendente(s)** "
+                                    "de revisão."
+                                )
 
-                                    if not resultado["pendentes"]:
-                                        st.success(
-                                            "Nenhum TBR pendente de revisão manual hoje."
+                                if not resultado["pendentes"]:
+                                    st.success(
+                                        "Nenhum TBR pendente de revisão manual hoje."
+                                    )
+                                    if resultado["auto_em_rota"] and st.button(
+                                        "💾 Confirmar e salvar histórico",
+                                        key="salvar_historico_sem_pendentes",
+                                        use_container_width=True,
+                                    ):
+                                        for r in resultado["auto_em_rota"]:
+                                            atualiza_base(
+                                                base_tbr, r["tbr"], r["resposta"],
+                                                r["state_scc"], data_hoje_str,
+                                            )
+                                        try:
+                                            salva_arquivo(
+                                                CAMINHO_HISTORICO_TBR,
+                                                gera_csv_historico(base_tbr),
+                                                sha_historico,
+                                                mensagem=(
+                                                    f"Atualiza State Finalizador "
+                                                    f"({len(resultado['auto_em_rota'])} "
+                                                    "automático(s))"
+                                                ),
+                                            )
+                                        except ConflitoDeSalvamento:
+                                            st.error(
+                                                "Alguém salvou o histórico ao mesmo "
+                                                "tempo. Toca no botão de novo pra "
+                                                "tentar com a versão mais recente."
+                                            )
+                                        except Exception as e:
+                                            st.error(f"Não consegui salvar no GitHub: {e}")
+                                        else:
+                                            st.success("Histórico atualizado!")
+                                            st.rerun()
+                                else:
+                                    st.caption(
+                                        "Copia a lista de cada grupo, pesquisa todos de "
+                                        "uma vez no SCC, e vai digitando o State "
+                                        "Finalizador de cada um. Agrupado por State do "
+                                        "SCC, igual no desktop."
+                                    )
+                                    grupos = {}
+                                    for r in resultado["pendentes"]:
+                                        grupos.setdefault(r["state_scc"], []).append(r)
+
+                                    respostas = {}
+                                    for state, itens in grupos.items():
+                                        st.markdown(f"**{state}** ({len(itens)} TBR(s))")
+                                        st.code(
+                                            "\n".join(r["tbr"] for r in itens),
+                                            language=None,
                                         )
-                                        if resultado["auto_em_rota"] and st.button(
+                                        for r in itens:
+                                            respostas[r["tbr"]] = st.text_input(
+                                                f"{r['tbr']} — {r['motivo_reabertura']}",
+                                                key=f"finalizador_{r['tbr']}",
+                                            )
+
+                                    preenchidos = {
+                                        tbr: v.strip()
+                                        for tbr, v in respostas.items()
+                                        if v.strip()
+                                    }
+                                    faltam = len(resultado["pendentes"]) - len(preenchidos)
+                                    if faltam:
+                                        st.caption(
+                                            f"Faltam {faltam} TBR(s) sem State "
+                                            "Finalizador preenchido — dá pra salvar só "
+                                            "os que já foram preenchidos, os outros "
+                                            "continuam pendentes pra próxima vez."
+                                        )
+
+                                    if preenchidos:
+                                        with st.expander(
+                                            f"Prévia — {len(preenchidos)} TBR(s) que "
+                                            "serão salvos"
+                                        ):
+                                            st.dataframe(
+                                                [
+                                                    {"TBR": tbr, "State Finalizador": v}
+                                                    for tbr, v in preenchidos.items()
+                                                ],
+                                                use_container_width=True,
+                                                hide_index=True,
+                                            )
+
+                                        if st.button(
                                             "💾 Confirmar e salvar histórico",
-                                            key="salvar_historico_sem_pendentes",
+                                            key="salvar_historico",
                                             use_container_width=True,
                                         ):
                                             for r in resultado["auto_em_rota"]:
@@ -514,15 +588,21 @@ def tela_etapa1():
                                                     base_tbr, r["tbr"], r["resposta"],
                                                     r["state_scc"], data_hoje_str,
                                                 )
+                                            for r in resultado["pendentes"]:
+                                                if r["tbr"] in preenchidos:
+                                                    atualiza_base(
+                                                        base_tbr, r["tbr"],
+                                                        preenchidos[r["tbr"]],
+                                                        r["state_scc"], data_hoje_str,
+                                                    )
                                             try:
                                                 salva_arquivo(
                                                     CAMINHO_HISTORICO_TBR,
                                                     gera_csv_historico(base_tbr),
                                                     sha_historico,
                                                     mensagem=(
-                                                        f"Atualiza State Finalizador "
-                                                        f"({len(resultado['auto_em_rota'])} "
-                                                        "automático(s))"
+                                                        f"Atualiza State Finalizador de "
+                                                        f"{len(preenchidos)} TBR(s)"
                                                     ),
                                                 )
                                             except ConflitoDeSalvamento:
@@ -532,106 +612,16 @@ def tela_etapa1():
                                                     "tentar com a versão mais recente."
                                                 )
                                             except Exception as e:
-                                                st.error(f"Não consegui salvar no GitHub: {e}")
+                                                st.error(
+                                                    f"Não consegui salvar no GitHub: {e}"
+                                                )
                                             else:
-                                                st.success("Histórico atualizado!")
+                                                st.success(
+                                                    f"Histórico atualizado! "
+                                                    f"{len(preenchidos)} TBR(s) "
+                                                    "salvo(s)."
+                                                )
                                                 st.rerun()
-                                    else:
-                                        st.caption(
-                                            "Copia a lista de cada grupo, pesquisa todos de "
-                                            "uma vez no SCC, e vai digitando o State "
-                                            "Finalizador de cada um. Agrupado por State do "
-                                            "SCC, igual no desktop."
-                                        )
-                                        grupos = {}
-                                        for r in resultado["pendentes"]:
-                                            grupos.setdefault(r["state_scc"], []).append(r)
-
-                                        respostas = {}
-                                        for state, itens in grupos.items():
-                                            st.markdown(f"**{state}** ({len(itens)} TBR(s))")
-                                            st.code(
-                                                "\n".join(r["tbr"] for r in itens),
-                                                language=None,
-                                            )
-                                            for r in itens:
-                                                respostas[r["tbr"]] = st.text_input(
-                                                    f"{r['tbr']} — {r['motivo_reabertura']}",
-                                                    key=f"finalizador_{r['tbr']}",
-                                                )
-
-                                        preenchidos = {
-                                            tbr: v.strip()
-                                            for tbr, v in respostas.items()
-                                            if v.strip()
-                                        }
-                                        faltam = len(resultado["pendentes"]) - len(preenchidos)
-                                        if faltam:
-                                            st.caption(
-                                                f"Faltam {faltam} TBR(s) sem State "
-                                                "Finalizador preenchido — dá pra salvar só "
-                                                "os que já foram preenchidos, os outros "
-                                                "continuam pendentes pra próxima vez."
-                                            )
-
-                                        if preenchidos:
-                                            with st.expander(
-                                                f"Prévia — {len(preenchidos)} TBR(s) que "
-                                                "serão salvos"
-                                            ):
-                                                st.dataframe(
-                                                    [
-                                                        {"TBR": tbr, "State Finalizador": v}
-                                                        for tbr, v in preenchidos.items()
-                                                    ],
-                                                    use_container_width=True,
-                                                    hide_index=True,
-                                                )
-
-                                            if st.button(
-                                                "💾 Confirmar e salvar histórico",
-                                                key="salvar_historico",
-                                                use_container_width=True,
-                                            ):
-                                                for r in resultado["auto_em_rota"]:
-                                                    atualiza_base(
-                                                        base_tbr, r["tbr"], r["resposta"],
-                                                        r["state_scc"], data_hoje_str,
-                                                    )
-                                                for r in resultado["pendentes"]:
-                                                    if r["tbr"] in preenchidos:
-                                                        atualiza_base(
-                                                            base_tbr, r["tbr"],
-                                                            preenchidos[r["tbr"]],
-                                                            r["state_scc"], data_hoje_str,
-                                                        )
-                                                try:
-                                                    salva_arquivo(
-                                                        CAMINHO_HISTORICO_TBR,
-                                                        gera_csv_historico(base_tbr),
-                                                        sha_historico,
-                                                        mensagem=(
-                                                            f"Atualiza State Finalizador de "
-                                                            f"{len(preenchidos)} TBR(s)"
-                                                        ),
-                                                    )
-                                                except ConflitoDeSalvamento:
-                                                    st.error(
-                                                        "Alguém salvou o histórico ao mesmo "
-                                                        "tempo. Toca no botão de novo pra "
-                                                        "tentar com a versão mais recente."
-                                                    )
-                                                except Exception as e:
-                                                    st.error(
-                                                        f"Não consegui salvar no GitHub: {e}"
-                                                    )
-                                                else:
-                                                    st.success(
-                                                        f"Histórico atualizado! "
-                                                        f"{len(preenchidos)} TBR(s) "
-                                                        "salvo(s)."
-                                                    )
-                                                    st.rerun()
 
 
 # ------------------------------------------------------------------
