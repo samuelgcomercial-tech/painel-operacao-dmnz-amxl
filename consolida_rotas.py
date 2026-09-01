@@ -13,6 +13,7 @@ caixa de pesquisa do SCC (Package Summary > Search).
 """
 
 import re
+import datetime as dt
 import openpyxl
 
 # nodes da Dominalog sempre comecam com "L" (LRN9, LPB9, LFO9, LRE9, LPA9,
@@ -20,6 +21,10 @@ import openpyxl
 # novos que ainda nao estao na lista
 NODES_CONHECIDOS = {"LRN9", "LFO9", "LPB9", "LRE9", "LPA9", "LSA8", "LBH9", "SXL9"}
 PADRAO_NODE = re.compile(r"L[A-Z]{2}\d")
+
+# procura AAAAMMDD em qualquer parte do nome do arquivo (ex:
+# "LRN9_CYCLE_1_20260812true.xlsx" -> 2026-08-12)
+PADRAO_DATA_NOME = re.compile(r"(20\d{2})(\d{2})(\d{2})")
 
 
 def detecta_node_do_nome(nome_arquivo):
@@ -38,29 +43,53 @@ def _carrega_planilha(arquivo, nome_arquivo):
     """Le o Excel a partir de um objeto de arquivo em memoria (o que o
     st.file_uploader devolve). Suporta .xlsx/.xlsm (openpyxl) e .xls
     antigo (xlrd) - mesmo comportamento do robo desktop, so trocando
-    'caminho no disco' por 'bytes em memoria'."""
+    'caminho no disco' por 'bytes em memoria'.
+
+    Devolve (abas, data_criacao) - data_criacao vem da propriedade
+    interna do Excel (quando o arquivo foi salvo pela primeira vez),
+    so existe pra .xlsx/.xlsm (o .xls antigo nao guarda isso de um
+    jeito facil de ler, entao vem None)."""
     ext = nome_arquivo.lower().rsplit(".", 1)[-1]
 
     if ext == "xls":
         import xlrd
         livro = xlrd.open_workbook(file_contents=arquivo.read())
-        return {
+        abas = {
             aba.name: [aba.row_values(r) for r in range(aba.nrows)]
             for aba in livro.sheets()
         }
+        return abas, None
 
     wb = openpyxl.load_workbook(arquivo, data_only=True)
-    return {
+    abas = {
         nome: [list(row) for row in wb[nome].iter_rows(values_only=True)]
         for nome in wb.sheetnames
     }
+    criado = wb.properties.created
+    return abas, (criado.date() if criado else None)
+
+
+def detecta_data_do_arquivo(nome_arquivo, data_criacao_excel):
+    """Data do arquivo, pra avisar se a pessoa subiu um arquivo de outro
+    dia sem perceber. Prioridade: 1) AAAAMMDD no nome do arquivo (é o
+    que os indianos usam, reflete o dia do ciclo de verdade) - 2) se não
+    achar no nome, usa a data que o proprio Excel guarda de quando foi
+    criado (so existe pra .xlsx/.xlsm)."""
+    m = PADRAO_DATA_NOME.search(nome_arquivo)
+    if m:
+        ano, mes, dia = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return dt.date(ano, mes, dia)
+        except ValueError:
+            pass  # numeros no nome nao formam uma data valida - ignora
+    return data_criacao_excel
 
 
 def consolida(arquivo, nome_arquivo):
     """arquivo: objeto vindo do st.file_uploader (ja aberto em memoria).
     nome_arquivo: arquivo.name, so pra saber a extensao e detectar o
-    node. Devolve {rota: [tbr, tbr, ...]}, mesmo formato de hoje."""
-    abas = _carrega_planilha(arquivo, nome_arquivo)
+    node. Devolve (tbrs_por_rota, data_do_arquivo)."""
+    abas, data_criacao_excel = _carrega_planilha(arquivo, nome_arquivo)
 
     abas_rota = [n for n in abas if n.lower().startswith("sequencedroute")]
     if not abas_rota:
@@ -80,7 +109,8 @@ def consolida(arquivo, nome_arquivo):
                 tbrs.append(str(tracking_id).strip())
         tbrs_por_rota[rota] = tbrs
 
-    return tbrs_por_rota
+    data_arquivo = detecta_data_do_arquivo(nome_arquivo, data_criacao_excel)
+    return tbrs_por_rota, data_arquivo
 
 
 def le_tbrs_colados(texto):
