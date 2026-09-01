@@ -24,7 +24,7 @@ from consolida_rotas import consolida, detecta_node_do_nome, le_tbrs_colados
 
 NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
 
-st.set_page_config(page_title="Fechamento LRN9", page_icon="📦", layout="centered")
+st.set_page_config(page_title="Painel Operação DMNZ - AMXL", page_icon="📦", layout="centered")
 
 # ------------------------------------------------------------------
 # ESTADO DA SESSAO
@@ -45,7 +45,8 @@ def vai_para(tela):
 # TELA INICIAL
 # ------------------------------------------------------------------
 def tela_home():
-    st.title("📦 Fechamento LRN9")
+    st.title("📦 Painel Operação DMNZ - AMXL")
+    st.caption("Fechamento LRN9")
 
     st.session_state.nome_usuario = st.text_input(
         "Seu nome",
