@@ -162,28 +162,56 @@ def tela_etapa1():
         node_texto = node_detectado or "não identificado"
         data_texto = data_arquivo.strftime("%d/%m/%Y") if data_arquivo else "não identificada"
 
-        # "Arquivo lido" e "Tem NA" lado a lado, dois retângulos na
-        # mesma linha. A simetria de altura é feita só por CSS
-        # (min-height), NÃO pelo parâmetro height= do st.container - esse
-        # parâmetro transforma a caixa numa área com scroll interno, e
-        # isso quebra o toque no celular (o dedo sempre mexe um
-        # pouquinho entre tocar e soltar, e o navegador interpreta esse
-        # movimento dentro de uma área com scroll como "rolar a página"
-        # em vez de "clicar", cancelando o clique do checkbox). Com
-        # min-height a caixa cresce à vontade se precisar (nunca corta
-        # nada) e o toque funciona normal.
-        ALTURA_CAIXAS = 170
+        # Se desmarcar de novo, não conta o que tinha digitado antes -
+        # "não tem NA" precisa realmente zerar, mesmo que o texto ainda
+        # esteja guardado por baixo dos panos. Calculado ANTES da grade
+        # (a caixa "Lista de TBRs" já precisa desse total pronto).
+        tbrs_na = le_tbrs_colados(st.session_state.get("texto_na", "")) if st.session_state.tem_na else []
+        lista_final = [tbr for tbrs in tbrs_por_rota.values() for tbr in tbrs] + tbrs_na
+        total_geral = len(lista_final)
+
+        # Avisos de node/data errados ficam ANTES da grade de caixas (não
+        # no meio dela) - senão abrem um vão entre as duas linhas e elas
+        # deixam de se encostar.
+        if node_detectado and node_detectado != NODE_ATUAL:
+            st.warning(
+                f"O nome do arquivo parece ser do node **{node_detectado}**, "
+                f"mas essa versão do robô só trata **{NODE_ATUAL}**. Confira "
+                "se é o arquivo certo antes de seguir."
+            )
+        if data_arquivo and data_arquivo != dt.date.today():
+            st.warning(
+                f"Esse arquivo é de **{data_texto}**, não é de hoje "
+                f"({dt.date.today().strftime('%d/%m/%Y')}). Confira se não "
+                "subiu o arquivo do dia errado antes de seguir."
+            )
+
+        # Grade 2x2: as 4 caixas com a MESMA altura e a MESMA proporção
+        # (colunas 1:1 nas duas linhas, mesmo gap na horizontal e sem
+        # texto solto entre as linhas) - título e legenda de cada caixa
+        # ficam DENTRO dela (não soltos acima), pra elas se encostarem
+        # de verdade, tipo um cruzamento. Só por CSS (min-height), nunca
+        # pelo parâmetro height= do st.container - esse parâmetro
+        # transforma a caixa numa área com scroll interno, e isso quebra
+        # o toque no celular (o dedo sempre mexe um pouquinho entre
+        # tocar e soltar, e o navegador interpreta esse movimento dentro
+        # de uma área com scroll como "rolar a página" em vez de
+        # "clicar"). Com min-height a caixa cresce à vontade se precisar
+        # (nunca corta nada) e o toque funciona normal.
+        ALTURA_CAIXAS = 260
         st.markdown(
             f"""
             <style>
-            .st-key-caixa_arquivo, .st-key-caixa_na {{
+            .st-key-caixa_arquivo, .st-key-caixa_na,
+            .st-key-caixa_rotas, .st-key-caixa_lista {{
                 min-height: {ALTURA_CAIXAS}px;
             }}
             </style>
             """,
             unsafe_allow_html=True,
         )
-        col_info, col_na = st.columns([1, 1], gap="medium")
+
+        col_info, col_na = st.columns([1, 1], gap="small")
         with col_info:
             with st.container(border=True, key="caixa_arquivo", vertical_alignment="center"):
                 st.markdown("**Arquivo lido**")
@@ -213,63 +241,54 @@ def tela_etapa1():
                         label_visibility="collapsed",
                     )
 
-        # Se desmarcar de novo, não conta o que tinha digitado antes -
-        # "não tem NA" precisa realmente zerar, mesmo que o texto ainda
-        # esteja guardado por baixo dos panos.
-        tbrs_na = le_tbrs_colados(st.session_state.get("texto_na", "")) if st.session_state.tem_na else []
-        lista_final = [tbr for tbrs in tbrs_por_rota.values() for tbr in tbrs] + tbrs_na
-        total_geral = len(lista_final)
-
-        # Avisos de node/data errados continuam de largura total, bem
-        # visíveis - não fica escondido dentro de um retângulo pequeno.
-        if node_detectado and node_detectado != NODE_ATUAL:
-            st.warning(
-                f"O nome do arquivo parece ser do node **{node_detectado}**, "
-                f"mas essa versão do robô só trata **{NODE_ATUAL}**. Confira "
-                "se é o arquivo certo antes de seguir."
-            )
-        if data_arquivo and data_arquivo != dt.date.today():
-            st.warning(
-                f"Esse arquivo é de **{data_texto}**, não é de hoje "
-                f"({dt.date.today().strftime('%d/%m/%Y')}). Confira se não "
-                "subiu o arquivo do dia errado antes de seguir."
-            )
-
-        # Estilo paisagem: rotas x pacotes numa coluna, lista de TBRs na
-        # coluna do lado - em vez de empilhado. Num monitor (o uso real
-        # no trabalho) fica lado a lado de verdade; no celular estreito
-        # o Streamlit empilha essas colunas sozinho, então nesse caso
-        # continua parecido com antes - é o navegador se ajustando à
-        # largura da tela, não um erro.
-        col_rotas, col_lista = st.columns([1, 1.3], gap="medium")
+        # Segunda linha da grade, MESMA proporção (1:1) e MESMO gap da
+        # primeira linha - assim as 4 caixas formam um quadriculado só,
+        # não dois blocos separados.
+        col_rotas, col_lista = st.columns([1, 1], gap="small")
 
         with col_rotas:
-            st.markdown("**Rotas x pacotes**")
-            st.caption(f"Total: {len(tbrs_por_rota)} rota(s), {total_rotas} TBR(s)")
-            # Conteúdo centralizado (vertical E horizontal) na caixa -
-            # com poucas rotas (caso comum do LRN9) não fica "grudado"
-            # no canto, sobrando vazio ao redor. O alinhamento horizontal
-            # do st.container sozinho não centraliza o TEXTO dentro da
-            # linha (só centralizaria o bloco, que já ocupa a largura
-            # toda) - por isso o texto vai direto em HTML com
-            # text-align:center.
-            linhas_rotas = "<br>".join(
-                f"{rota}: {len(v)}" for rota, v in tbrs_por_rota.items()
-            )
-            with st.container(border=True, height=320, vertical_alignment="center"):
+            # Essa caixa não tem nenhum botão/checkbox dentro (só texto
+            # estático), então pode usar height= de verdade (com scroll
+            # se tiver muitas rotas) sem o risco de travar toque - o
+            # problema de scroll cancelando clique só existe quando tem
+            # algo clicável dentro pra tocar. SEM vertical_alignment=
+            # "center" aqui de propósito: com muitas rotas o conteúdo
+            # passa da altura da caixa, e centralizar um conteúdo maior
+            # que a caixa empurra o título ("Rotas x pacotes") pra fora
+            # da área visível, escondendo-o. Alinhado no topo, o título
+            # sempre aparece primeiro, e só o que sobra rola pra baixo.
+            with st.container(border=True, key="caixa_rotas", height=ALTURA_CAIXAS):
+                st.markdown("**Rotas x pacotes**")
+                st.caption(f"Total: {len(tbrs_por_rota)} rota(s), {total_rotas} TBR(s)")
+                # Conteúdo centralizado (vertical E horizontal) na caixa -
+                # com poucas rotas (caso comum do LRN9) não fica "grudado"
+                # no canto, sobrando vazio ao redor. O alinhamento horizontal
+                # do st.container sozinho não centraliza o TEXTO dentro da
+                # linha (só centralizaria o bloco, que já ocupa a largura
+                # toda) - por isso o texto vai direto em HTML com
+                # text-align:center.
+                linhas_rotas = "<br>".join(
+                    f"{rota}: {len(v)}" for rota, v in tbrs_por_rota.items()
+                )
                 st.markdown(
                     f"<div style='text-align:center'>{linhas_rotas}</div>",
                     unsafe_allow_html=True,
                 )
 
         with col_lista:
-            legenda_na = f" ({total_rotas} + {len(tbrs_na)} de NA)" if tbrs_na else ""
-            st.markdown(f"**Lista de TBRs — {total_geral} TBR(s){legenda_na}**")
-            st.caption("Ícone de copiar no canto do quadro pega a lista inteira de uma vez.")
-            # Caixa mais alta - fica mais parecida em altura com o
-            # bloco de upload + rotas ao lado, formando um bloco mais
-            # "quadrado" no geral, em vez de uma tira baixa e larga.
-            st.code("\n".join(lista_final), language=None, height=320)
+            with st.container(border=True, key="caixa_lista"):
+                legenda_na = f" ({total_rotas} + {len(tbrs_na)} de NA)" if tbrs_na else ""
+                st.markdown(f"**Lista de TBRs — {total_geral} TBR(s){legenda_na}**")
+                st.caption("Ícone de copiar no canto do quadro pega a lista inteira de uma vez.")
+                # Altura do bloco de código um pouco menor que a caixa
+                # (sobra espaço do título/legenda acima) - o resto da
+                # lista continua acessível rolando dentro do quadro, ou
+                # pelo ícone de copiar, que pega tudo de uma vez.
+                st.code(
+                    "\n".join(lista_final),
+                    language=None,
+                    height=ALTURA_CAIXAS - 130,
+                )
 
         st.write("")
         col_esq, col_meio, col_dir = st.columns([1, 2, 1])
