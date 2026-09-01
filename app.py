@@ -150,18 +150,33 @@ def tela_etapa1():
         data_texto = data_arquivo.strftime("%d/%m/%Y") if data_arquivo else "não identificada"
 
         # "Arquivo lido" e "Tem NA" lado a lado, dois retângulos na
-        # mesma linha, em vez de caixa cheia empilhada. Altura FIXA nos
-        # dois (mesmo valor) - senão, quando marca NA e a caixa de
-        # colar aparece, o retângulo da direita fica mais alto que o da
-        # esquerda e perde a simetria.
+        # mesma linha. A simetria de altura é feita só por CSS
+        # (min-height), NÃO pelo parâmetro height= do st.container - esse
+        # parâmetro transforma a caixa numa área com scroll interno, e
+        # isso quebra o toque no celular (o dedo sempre mexe um
+        # pouquinho entre tocar e soltar, e o navegador interpreta esse
+        # movimento dentro de uma área com scroll como "rolar a página"
+        # em vez de "clicar", cancelando o clique do checkbox). Com
+        # min-height a caixa cresce à vontade se precisar (nunca corta
+        # nada) e o toque funciona normal.
         ALTURA_CAIXAS = 170
+        st.markdown(
+            f"""
+            <style>
+            .st-key-caixa_arquivo, .st-key-caixa_na {{
+                min-height: {ALTURA_CAIXAS}px;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
         col_info, col_na = st.columns([1, 1], gap="medium")
         with col_info:
-            with st.container(border=True, height=ALTURA_CAIXAS, vertical_alignment="center"):
+            with st.container(border=True, key="caixa_arquivo", vertical_alignment="center"):
                 st.markdown("**Arquivo lido**")
                 st.write(f"Node: **{node_texto}**  ·  Data: **{data_texto}**")
         with col_na:
-            with st.container(border=True, height=ALTURA_CAIXAS):
+            with st.container(border=True, key="caixa_na"):
                 tem_na = st.checkbox("Tem TBRs de NA para consulta no SCC? (opcional)")
                 if tem_na:
                     st.text_area(
