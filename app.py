@@ -552,16 +552,16 @@ def tela_etapa1():
                                         # Lista pra copiar e colar de uma vez no SCC -
                                         # separada por "; " (confirmado que o SCC
                                         # aceita colar assim, ele extrai só os TBRs
-                                        # válidos e ignora o resto) - deixa a lista
-                                        # bem mais horizontal/compacta do que um TBR
-                                        # por linha. Ainda com altura máxima (rola
-                                        # por dentro se passar) por segurança em
-                                        # grupos muito grandes - o ícone de copiar
-                                        # sempre pega a lista inteira mesmo assim.
+                                        # válidos e ignora o resto). Sem height= fixo
+                                        # - como fica tudo numa linha só (não quebra
+                                        # sozinha), uma altura fixa só sobrava espaço
+                                        # vazio embaixo; sem ela a caixa se ajusta
+                                        # à própria linha, rolando pro lado se for
+                                        # comprida demais (o ícone de copiar pega a
+                                        # lista inteira de qualquer forma).
                                         st.code(
                                             "; ".join(r["tbr"] for r in itens),
                                             language=None,
-                                            height=150,
                                         )
                                         colunas = st.columns(COLUNAS_POR_LINHA)
                                         for i, r in enumerate(itens):
