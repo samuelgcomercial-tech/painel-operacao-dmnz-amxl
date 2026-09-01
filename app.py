@@ -21,8 +21,20 @@ import datetime as dt
 import streamlit as st
 
 from consolida_rotas import consolida, detecta_node_do_nome, le_tbrs_colados
+from base_das import (
+    extrai_das_do_dia,
+    gera_csv_base_das,
+    le_csv_scc,
+    normaliza_nome,
+    parseia_texto_base,
+)
+from github_store import ConflitoDeSalvamento, le_arquivo, salva_arquivo, secrets_configurados
 
 NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
+
+# Onde a base de DAs mora no repositório do GitHub - mesmo padrão já
+# decidido pros outros arquivos de memória entre dias (dados_nodes/<NODE>/).
+CAMINHO_BASE_DAS = f"dados_nodes/{NODE_ATUAL}/base_das_dmnz.csv"
 
 st.set_page_config(page_title="Painel Operação DMNZ - AMXL", page_icon="📦", layout="wide")
 
@@ -296,12 +308,138 @@ def tela_etapa1():
             st.markdown("**Etapa 2 — CSV do SCC**")
             st.caption("Cole a lista no SCC, exporte e suba o CSV aqui.")
             arquivo_csv = st.file_uploader("CSV exportado do SCC", type=["csv"], key="csv_scc")
+
+        # Primeiro pedaço de verdade da Etapa 2: só a parte de manter a
+        # base de DAs (quem é DMNZ) em dia. O resto (State Finalizador
+        # por TBR, gerar o CSV final com as colunas adicionadas) ainda
+        # não foi construído - de propósito, um pedaço de cada vez.
+        #
+        # A base mora no GitHub (não é upload manual) - o app lê sozinho
+        # e, quando o usuário confirma DAs novos, salva direto lá. Se o
+        # arquivo ainda não existir no repositório, a primeira gravação
+        # já cria ele - não precisa criar nada na mão antes.
         if arquivo_csv is not None:
-            st.info(
-                "Arquivo recebido — o processamento da Etapa 2 (classificação "
-                "automática DMNZ/Parceiro, base de histórico) ainda vai ser "
-                "construído. Por enquanto só confirma que o upload funciona."
-            )
+            if not secrets_configurados():
+                col_esq2, col_meio2, col_dir2 = st.columns([1, 2, 1])
+                with col_meio2:
+                    st.warning(
+                        "A base de DAs ainda não está configurada pra salvar no GitHub "
+                        "(falta o secret `github` no Streamlit Cloud - token + repositório). "
+                        "Até isso ser configurado, essa parte não funciona."
+                    )
+            else:
+                try:
+                    linhas_csv = le_csv_scc(arquivo_csv)
+                except Exception as e:
+                    st.error(f"Não consegui ler esse CSV: {e}")
+                    linhas_csv = None
+
+                if linhas_csv is not None:
+                    das_dia = extrai_das_do_dia(linhas_csv)
+
+                    if not das_dia:
+                        col_esq2b, col_meio2b, col_dir2b = st.columns([1, 2, 1])
+                        with col_meio2b:
+                            st.info(
+                                "Nenhum motorista de verdade apareceu nesse CSV (só leituras "
+                                "de sistema/suporte, tipo LastMileRoutePlanner). Nada pra "
+                                "classificar."
+                            )
+                    else:
+                        try:
+                            texto_base, sha_base = le_arquivo(CAMINHO_BASE_DAS)
+                            base_dict, base_bruta = parseia_texto_base(texto_base)
+                        except Exception as e:
+                            st.error(f"Não consegui ler a base de DAs no GitHub: {e}")
+                            base_dict, base_bruta, sha_base = {}, [], None
+
+                        ja_cadastrados = {normaliza_nome(n) for n, _ in base_bruta}
+                        desconhecidos = [
+                            n for n in das_dia if normaliza_nome(n) not in ja_cadastrados
+                        ]
+                        qtd_dmnz = sum(
+                            1 for n in das_dia if base_dict.get(normaliza_nome(n)) == "DMNZ"
+                        )
+
+                        col_esq3, col_meio3, col_dir3 = st.columns([1, 2, 1])
+                        with col_meio3:
+                            st.markdown("**Base de DAs (quem é DMNZ)**")
+                            st.caption(
+                                f"Lida direto do repositório — {len(base_bruta)} DA(s) "
+                                "cadastrado(s) no total."
+                                if base_bruta
+                                else "Base ainda vazia no repositório — é a primeira vez."
+                            )
+                            st.write(
+                                f"**{len(das_dia)} motorista(s) diferentes rodaram hoje** "
+                                f"— {len(das_dia) - len(desconhecidos)} já cadastrado(s) "
+                                f"({qtd_dmnz} como DMNZ)."
+                            )
+
+                            if not desconhecidos:
+                                st.success(
+                                    "Todos os motoristas de hoje já estão cadastrados na base."
+                                )
+                            else:
+                                escolhidos = st.pills(
+                                    f"{len(desconhecidos)} motorista(s) ainda não "
+                                    "cadastrado(s) — quais são DMNZ?",
+                                    desconhecidos,
+                                    selection_mode="multi",
+                                    key="pills_desconhecidos",
+                                )
+                                st.caption(
+                                    f"{len(escolhidos)} selecionado(s). Quem não for tocado "
+                                    "fica de fora da base por enquanto — dá pra adicionar "
+                                    "depois, com o CSV de outro dia."
+                                )
+
+                                if escolhidos:
+                                    nova_base_bruta = base_bruta + [
+                                        (nome, "DMNZ") for nome in escolhidos
+                                    ]
+                                    with st.expander(
+                                        f"Prévia da base atualizada "
+                                        f"({len(nova_base_bruta)} DA(s) no total)"
+                                    ):
+                                        st.dataframe(
+                                            [
+                                                {"Nome do DA": n, "DMNZ": c}
+                                                for n, c in nova_base_bruta
+                                            ],
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
+
+                                    if st.button(
+                                        "💾 Salvar no GitHub",
+                                        key="salvar_base_das",
+                                        use_container_width=True,
+                                    ):
+                                        try:
+                                            salva_arquivo(
+                                                CAMINHO_BASE_DAS,
+                                                gera_csv_base_das(nova_base_bruta),
+                                                sha_base,
+                                                mensagem=(
+                                                    f"Adiciona DA(s) DMNZ: "
+                                                    f"{', '.join(escolhidos)}"
+                                                ),
+                                            )
+                                        except ConflitoDeSalvamento:
+                                            st.error(
+                                                "Alguém salvou a base ao mesmo tempo. Toca "
+                                                "em \"Salvar no GitHub\" de novo pra tentar "
+                                                "com a versão mais recente."
+                                            )
+                                        except Exception as e:
+                                            st.error(f"Não consegui salvar no GitHub: {e}")
+                                        else:
+                                            st.success(
+                                                f"Base atualizada! {len(escolhidos)} "
+                                                "motorista(s) novo(s) salvo(s) como DMNZ."
+                                            )
+                                            st.rerun()
 
 
 # ------------------------------------------------------------------
