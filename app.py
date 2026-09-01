@@ -189,7 +189,7 @@ def tela_etapa1():
                 st.markdown("**Arquivo lido**")
                 st.write(f"Node: **{node_texto}**  ·  Data: **{data_texto}**")
         with col_na:
-            with st.container(border=True, key="caixa_na"):
+            with st.container(border=True, key="caixa_na", vertical_alignment="center"):
                 # Era um st.checkbox, mas ele simplesmente não respondia ao
                 # toque no celular (testado várias vezes, sempre falhou -
                 # é um problema conhecido desse componente em alguns
