@@ -502,7 +502,10 @@ def tela_etapa1():
                                             {
                                                 "Rota": r["rota"],
                                                 "DA": r["da"],
-                                                "Pacotes": r["pacotes"],
+                                                "Entregues": r["entregues"],
+                                                "Em rota": r["em_rota"],
+                                                "A analisar": r["a_analisar"],
+                                                "Total": r["pacotes"],
                                                 "Classificação": r["classificacao"],
                                             }
                                             for r in resumo_das
