@@ -119,6 +119,22 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
     }
 
 
+def _categoria_state(state_scc):
+    """Agrupa o State bruto do SCC em 3 baldes pra conferencia por DA:
+    'entregue' (State=Delivered), 'em_rota' (contem "in transit" ou
+    "failed" - mesmo criterio ja usado em eh_state_auto_em_rota) e
+    'a_analisar' (qualquer outro state - ex: Manifested, Arrived, Out
+    for Delivery - ainda no inicio do fluxo, sem State Finalizador
+    automatico possivel; precisa de revisao manual, igual o resto do
+    State Finalizador)."""
+    txt = (state_scc or "").strip().lower()
+    if txt == "delivered":
+        return "entregue"
+    if "in transit" in txt or "failed" in txt:
+        return "em_rota"
+    return "a_analisar"
+
+
 def resumo_das_por_rota(linhas_csv, base_das):
     """Monta um resumo Rota -> DA(s) que apareceram nela escaneando, com a
     classificacao DMNZ/PARCEIRO de cada um - serve pra conferencia visual
@@ -129,23 +145,47 @@ def resumo_das_por_rota(linhas_csv, base_das):
     escaneou na rota, nao so o que mais aparece - senao um "resgate" ou
     "divisao" ficaria escondido atras do DA dominante.
 
-    Devolve uma lista de dicts {rota, da, pacotes, classificacao, mista} -
-    'mista' e True em toda linha de uma rota que teve DA de DMNZ E de
-    Parceiro ao mesmo tempo (o caso que mais vale a pena conferir)."""
-    contagem_por_rota = {}
+    O total de pacotes de cada DA vem detalhado em 3 baldes (ve
+    _categoria_state): entregues, em_rota, a_analisar - alem do total.
+
+    Devolve uma lista de dicts {rota, da, entregues, em_rota, a_analisar,
+    pacotes, classificacao, mista} - 'mista' e True em toda linha de uma
+    rota que teve DA de DMNZ E de Parceiro ao mesmo tempo (o caso que
+    mais vale a pena conferir)."""
+    detalhe_por_rota = {}
     for l in linhas_csv:
         rota = (l.get("Route Code") or "").strip()
         nome = (l.get("Last Scan By") or "").strip()
-        if rota and eh_da_de_verdade(nome):
-            contagem_por_rota.setdefault(rota, Counter())[nome] += 1
+        if not (rota and eh_da_de_verdade(nome)):
+            continue
+        categoria = _categoria_state(l.get("State"))
+        contagem = detalhe_por_rota.setdefault(rota, {}).setdefault(
+            nome, {"entregue": 0, "em_rota": 0, "a_analisar": 0}
+        )
+        contagem[categoria] += 1
 
     linhas = []
-    for rota in sorted(contagem_por_rota):
+    for rota in sorted(detalhe_por_rota):
+        # ordena pelo total de pacotes (maior primeiro) - mesmo efeito do
+        # most_common() de antes, só que agora somando os 3 baldes.
+        itens_nome = sorted(
+            detalhe_por_rota[rota].items(),
+            key=lambda kv: sum(kv[1].values()),
+            reverse=True,
+        )
         itens_rota = []
-        for nome, qtd in contagem_por_rota[rota].most_common():
+        for nome, contagem in itens_nome:
             nome_norm = normaliza_nome(nome)
             classificacao = "DMNZ" if base_das.get(nome_norm) == "DMNZ" else "PARCEIRO"
-            itens_rota.append({"rota": rota, "da": nome, "pacotes": qtd, "classificacao": classificacao})
+            itens_rota.append({
+                "rota": rota,
+                "da": nome,
+                "entregues": contagem["entregue"],
+                "em_rota": contagem["em_rota"],
+                "a_analisar": contagem["a_analisar"],
+                "pacotes": sum(contagem.values()),
+                "classificacao": classificacao,
+            })
         mista = len({item["classificacao"] for item in itens_rota}) > 1
         for item in itens_rota:
             item["mista"] = mista
