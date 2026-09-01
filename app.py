@@ -32,6 +32,7 @@ from base_das import (
 from github_store import ConflitoDeSalvamento, le_arquivo, salva_arquivo, secrets_configurados
 from historico_tbr import atualiza_base, gera_csv_historico, parseia_texto_historico
 from state_finalizador import processa as processa_state_finalizador
+from state_finalizador import resumo_das_por_rota
 
 NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
 
@@ -477,6 +478,38 @@ def tela_etapa1():
                                 resultado = processa_state_finalizador(
                                     linhas_csv, base_tbr, base_dict, data_hoje_str
                                 )
+
+                                # Conferência manual: DA de cada rota, pra
+                                # pegar troca entre DMNZ x Parceiro (ex: um
+                                # DA nosso resgatou uma rota do parceiro, ou
+                                # o contrário) antes de seguir com o resto.
+                                resumo_das = resumo_das_por_rota(linhas_csv, base_dict)
+                                rotas_mistas = sorted({
+                                    r["rota"] for r in resumo_das if r["mista"]
+                                })
+                                if rotas_mistas:
+                                    st.warning(
+                                        "⚠️ Rota(s) com DA de DMNZ e de Parceiro "
+                                        f"misturados: {', '.join(rotas_mistas)}. "
+                                        "Vale conferir se foi resgate ou divisão."
+                                    )
+                                with st.expander(
+                                    f"🔍 Conferência: DA de cada rota (DMNZ x Parceiro) "
+                                    f"— {len(resumo_das)} registro(s)"
+                                ):
+                                    st.dataframe(
+                                        [
+                                            {
+                                                "Rota": r["rota"],
+                                                "DA": r["da"],
+                                                "Pacotes": r["pacotes"],
+                                                "Classificação": r["classificacao"],
+                                            }
+                                            for r in resumo_das
+                                        ],
+                                        use_container_width=True,
+                                        hide_index=True,
+                                    )
 
                                 st.markdown("**State Finalizador (por TBR)**")
                                 st.write(
