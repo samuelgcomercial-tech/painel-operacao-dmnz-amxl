@@ -56,6 +56,8 @@ if "data_arquivo_rotas" not in st.session_state:
     st.session_state.data_arquivo_rotas = None
 if "node_detectado_rotas" not in st.session_state:
     st.session_state.node_detectado_rotas = None
+if "tem_na" not in st.session_state:
+    st.session_state.tem_na = False
 
 
 def vai_para(tela):
@@ -177,8 +179,22 @@ def tela_etapa1():
                 st.write(f"Node: **{node_texto}**  ·  Data: **{data_texto}**")
         with col_na:
             with st.container(border=True, key="caixa_na"):
-                tem_na = st.checkbox("Tem TBRs de NA para consulta no SCC? (opcional)")
-                if tem_na:
+                # Era um st.checkbox, mas ele simplesmente não respondia ao
+                # toque no celular (testado várias vezes, sempre falhou -
+                # é um problema conhecido desse componente em alguns
+                # celulares/navegadores). Trocado por um botão normal, que
+                # já provou funcionar em toda a tela (Voltar, Trocar
+                # arquivo, Iniciar Fechamento) - só liga/desliga um
+                # "interruptor" guardado no session_state.
+                rotulo_botao = (
+                    "✅ Tem TBRs de NA (toque para desmarcar)"
+                    if st.session_state.tem_na
+                    else "☐ Tem TBRs de NA para consulta no SCC? (opcional — toque para marcar)"
+                )
+                if st.button(rotulo_botao, key="botao_tem_na", use_container_width=True):
+                    st.session_state.tem_na = not st.session_state.tem_na
+                    st.rerun()
+                if st.session_state.tem_na:
                     st.text_area(
                         "Cole os TBRs de NA aqui, um por linha",
                         key="texto_na",
@@ -189,7 +205,7 @@ def tela_etapa1():
         # Se desmarcar de novo, não conta o que tinha digitado antes -
         # "não tem NA" precisa realmente zerar, mesmo que o texto ainda
         # esteja guardado por baixo dos panos.
-        tbrs_na = le_tbrs_colados(st.session_state.get("texto_na", "")) if tem_na else []
+        tbrs_na = le_tbrs_colados(st.session_state.get("texto_na", "")) if st.session_state.tem_na else []
         lista_final = [tbr for tbrs in tbrs_por_rota.values() for tbr in tbrs] + tbrs_na
         total_geral = len(lista_final)
 
