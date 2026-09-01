@@ -83,14 +83,25 @@ def tela_home():
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("▶️ Iniciar Fechamento", use_container_width=True, type="primary"):
+        if st.button(
+            "▶️ Iniciar",
+            use_container_width=True,
+            type="primary",
+            help="Fluxo normal, do zero: subir rotas → lista pro SCC → subir CSV → gerar fechamento.",
+        ):
             if not st.session_state.nome_usuario.strip():
                 st.warning("Digita seu nome antes de continuar.")
             else:
                 vai_para("etapa1")
                 st.rerun()
-        st.button("🔁 Reprocessar CSV", use_container_width=True, disabled=True,
-                   help="Ainda não construído — em breve.")
+        st.button(
+            "🔁 Reprocessar CSV SCC",
+            use_container_width=True,
+            disabled=True,
+            help="Ainda não construído — em breve. Pra quando já rodou o Iniciar mas precisa "
+            "subir um CSV corrigido (ou reaproveitar uma edição de TBR/Reversa) e gerar o "
+            "fechamento de novo, sem refazer a consolidação de rotas do zero.",
+        )
     with col2:
         st.button("✏️ Editar TBR", use_container_width=True, disabled=True,
                    help="Ainda não construído — em breve.")
