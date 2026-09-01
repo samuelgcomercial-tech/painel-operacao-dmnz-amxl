@@ -56,6 +56,15 @@ def classifica_dmnz_ou_parceiro(nome_da, rota, base_das, motorista_real_da_rota)
     return "DMNZ" if base_das.get(nome_real_norm) == "DMNZ" else "PARCEIRO"
 
 
+def eh_state_vazio(state_scc):
+    """TBR que chegou do SCC sem nenhum State preenchido - acontece de vez
+    em quando (falha de sincronizacao do proprio SCC). Nao tem State
+    Finalizador nenhum pra deduzir dai, entao classifica automatico como
+    'SEM STATE SCC' em vez de pedir revisao manual - nao ha nada pra
+    revisar, o problema e o dado que nao veio."""
+    return not (state_scc or "").strip()
+
+
 def eh_state_auto_em_rota(state_scc, last_scan_by):
     """States que o robo classifica sozinho (sem perguntar) quando ja tem
     um DA de verdade vinculado: 'EM ROTA - DMNZ' ou 'EM ROTA - PARCEIRO'.
@@ -100,9 +109,12 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
     reabrir, conhecidos = decide_quem_precisa_reabrir(nao_entregues, base_tbr)
 
     auto_em_rota = []
+    auto_sem_state = []
     pendentes = []
     for r in reabrir:
-        if eh_state_auto_em_rota(r["state_scc"], r["last_scan_by"]):
+        if eh_state_vazio(r["state_scc"]):
+            auto_sem_state.append({**r, "resposta": "SEM STATE SCC"})
+        elif eh_state_auto_em_rota(r["state_scc"], r["last_scan_by"]):
             classificacao = classifica_dmnz_ou_parceiro(
                 r["last_scan_by"], r["route_code"], base_das, motorista_real_da_rota
             )
@@ -113,6 +125,7 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
     return {
         "entregues": entregues,
         "auto_em_rota": auto_em_rota,
+        "auto_sem_state": auto_sem_state,
         "conhecidos": conhecidos,
         "pendentes": pendentes,
         "motorista_real_da_rota": motorista_real_da_rota,
