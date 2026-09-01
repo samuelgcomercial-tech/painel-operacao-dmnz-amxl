@@ -119,6 +119,40 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
     }
 
 
+def resumo_das_por_rota(linhas_csv, base_das):
+    """Monta um resumo Rota -> DA(s) que apareceram nela escaneando, com a
+    classificacao DMNZ/PARCEIRO de cada um - serve pra conferencia visual
+    manual (ex: perceber que um DA nosso apareceu numa rota que
+    normalmente e do parceiro, ou o contrario - troca entre empresas,
+    resgate ou divisao de rota). Ao contrario de
+    calcula_motorista_real_da_rota, aqui aparece TODO DA de verdade que
+    escaneou na rota, nao so o que mais aparece - senao um "resgate" ou
+    "divisao" ficaria escondido atras do DA dominante.
+
+    Devolve uma lista de dicts {rota, da, pacotes, classificacao, mista} -
+    'mista' e True em toda linha de uma rota que teve DA de DMNZ E de
+    Parceiro ao mesmo tempo (o caso que mais vale a pena conferir)."""
+    contagem_por_rota = {}
+    for l in linhas_csv:
+        rota = (l.get("Route Code") or "").strip()
+        nome = (l.get("Last Scan By") or "").strip()
+        if rota and eh_da_de_verdade(nome):
+            contagem_por_rota.setdefault(rota, Counter())[nome] += 1
+
+    linhas = []
+    for rota in sorted(contagem_por_rota):
+        itens_rota = []
+        for nome, qtd in contagem_por_rota[rota].most_common():
+            nome_norm = normaliza_nome(nome)
+            classificacao = "DMNZ" if base_das.get(nome_norm) == "DMNZ" else "PARCEIRO"
+            itens_rota.append({"rota": rota, "da": nome, "pacotes": qtd, "classificacao": classificacao})
+        mista = len({item["classificacao"] for item in itens_rota}) > 1
+        for item in itens_rota:
+            item["mista"] = mista
+        linhas.extend(itens_rota)
+    return linhas
+
+
 def monta_coluna_das_dmnz(linhas_csv, base_das, motorista_real_da_rota):
     """Monta a coluna final 'DAs DMNZ' pra cada linha do CSV (dict tbr ->
     classificacao). So o Last Scan By de uma entrega CONFIRMADA
