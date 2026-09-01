@@ -24,7 +24,7 @@ from consolida_rotas import consolida, detecta_node_do_nome, le_tbrs_colados
 
 NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
 
-st.set_page_config(page_title="Painel Operação DMNZ - AMXL", page_icon="📦", layout="centered")
+st.set_page_config(page_title="Painel Operação DMNZ - AMXL", page_icon="📦", layout="wide")
 
 # ------------------------------------------------------------------
 # ESTADO DA SESSAO
@@ -114,32 +114,36 @@ def tela_etapa1():
         tbrs_por_rota = st.session_state.tbrs_por_rota
         total_rotas = sum(len(v) for v in tbrs_por_rota.values())
 
-        # PREVIA dos dados lidos, antes de qualquer coisa - padrão do
-        # projeto: sempre mostrar o que foi lido antes de seguir. Em
-        # formato de linha só (em vez de tabela) pra não ocupar altura
-        # à toa - com poucas rotas cabe tudo numa linha só.
-        resumo_por_rota = "  ·  ".join(
-            f"{rota}: {len(v)}" for rota, v in tbrs_por_rota.items()
-        )
-        st.caption(
-            f"**Lido:** {len(tbrs_por_rota)} rota(s), {total_rotas} TBR(s) — {resumo_por_rota}"
-        )
-
-        with st.expander("Tem NA para consulta no SCC? (opcional)"):
-            texto_na = st.text_area(
-                "Cole os TBRs de NA aqui, um por linha",
-                key="texto_na",
-                height=80,
-            )
         tbrs_na = le_tbrs_colados(st.session_state.get("texto_na", ""))
-
         lista_final = [tbr for tbrs in tbrs_por_rota.values() for tbr in tbrs] + tbrs_na
         total_geral = len(lista_final)
 
-        legenda_na = f" ({total_rotas} + {len(tbrs_na)} de NA)" if tbrs_na else ""
-        st.markdown(f"**Lista consolidada — {total_geral} TBR(s){legenda_na}**")
-        st.caption("Ícone de copiar no canto do quadro pega a lista inteira de uma vez.")
-        st.code("\n".join(lista_final), language=None, height=160)
+        # Estilo paisagem: rotas x pacotes numa coluna, lista de TBRs na
+        # coluna do lado - em vez de empilhado. Num monitor (o uso real
+        # no trabalho) fica lado a lado de verdade; no celular estreito
+        # o Streamlit empilha essas colunas sozinho, então nesse caso
+        # continua parecido com antes - é o navegador se ajustando à
+        # largura da tela, não um erro.
+        col_rotas, col_lista = st.columns([1, 1.3], gap="medium")
+
+        with col_rotas:
+            st.markdown("**Rotas x pacotes**")
+            for rota, v in tbrs_por_rota.items():
+                st.write(f"{rota}: {len(v)}")
+            st.caption(f"Total: {len(tbrs_por_rota)} rota(s), {total_rotas} TBR(s)")
+
+            with st.expander("Tem NA para consulta no SCC? (opcional)"):
+                st.text_area(
+                    "Cole os TBRs de NA aqui, um por linha",
+                    key="texto_na",
+                    height=80,
+                )
+
+        with col_lista:
+            legenda_na = f" ({total_rotas} + {len(tbrs_na)} de NA)" if tbrs_na else ""
+            st.markdown(f"**Lista de TBRs — {total_geral} TBR(s){legenda_na}**")
+            st.caption("Ícone de copiar no canto do quadro pega a lista inteira de uma vez.")
+            st.code("\n".join(lista_final), language=None, height=260)
 
         st.markdown("**Etapa 2 — CSV do SCC:** cole a lista no SCC, exporte e suba o CSV aqui.")
         arquivo_csv = st.file_uploader("CSV exportado do SCC", type=["csv"], key="csv_scc")
