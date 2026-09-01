@@ -538,9 +538,10 @@ def tela_etapa1():
                                                 st.rerun()
                                     else:
                                         st.caption(
-                                            "Abre o Histórico de cada um no SCC e digita o "
-                                            "State Finalizador. Agrupado por State do SCC, "
-                                            "igual no desktop."
+                                            "Copia a lista de cada grupo, pesquisa todos de "
+                                            "uma vez no SCC, e vai digitando o State "
+                                            "Finalizador de cada um. Agrupado por State do "
+                                            "SCC, igual no desktop."
                                         )
                                         grupos = {}
                                         for r in resultado["pendentes"]:
@@ -549,6 +550,10 @@ def tela_etapa1():
                                         respostas = {}
                                         for state, itens in grupos.items():
                                             st.markdown(f"**{state}** ({len(itens)} TBR(s))")
+                                            st.code(
+                                                "\n".join(r["tbr"] for r in itens),
+                                                language=None,
+                                            )
                                             for r in itens:
                                                 respostas[r["tbr"]] = st.text_input(
                                                     f"{r['tbr']} — {r['motivo_reabertura']}",
