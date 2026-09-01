@@ -26,6 +26,23 @@ NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
 
 st.set_page_config(page_title="Painel Operação DMNZ - AMXL", page_icon="📦", layout="wide")
 
+# Por padrão o Streamlit só mostra o ícone de copiar de um st.code()
+# quando passa o mouse/toca dentro do quadro - no celular isso confunde
+# (parece que não tem botão). Aqui deixa o ícone sempre visível, só nos
+# quadros de código (não mexe em outros botões escondidos do app, tipo
+# de tabela/gráfico, se um dia existirem).
+st.markdown(
+    """
+    <style>
+    [data-testid="stCode"] [data-testid="stBaseButton-elementToolbar"] {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # ------------------------------------------------------------------
 # ESTADO DA SESSAO
 # ------------------------------------------------------------------
@@ -35,6 +52,8 @@ if "nome_usuario" not in st.session_state:
     st.session_state.nome_usuario = ""
 if "tbrs_por_rota" not in st.session_state:
     st.session_state.tbrs_por_rota = None
+if "data_arquivo_rotas" not in st.session_state:
+    st.session_state.data_arquivo_rotas = None
 
 
 def vai_para(tela):
@@ -96,19 +115,36 @@ def tela_etapa1():
 
     if arquivo_rotas is not None:
         node_detectado = detecta_node_do_nome(arquivo_rotas.name)
-        if node_detectado and node_detectado != NODE_ATUAL:
-            st.warning(
-                f"O nome do arquivo parece ser do node **{node_detectado}**, "
-                f"mas essa versão do robô só trata **{NODE_ATUAL}**. Confira "
-                "se é o arquivo certo antes de seguir."
-            )
 
         try:
-            tbrs_por_rota = consolida(arquivo_rotas, arquivo_rotas.name)
+            tbrs_por_rota, data_arquivo = consolida(arquivo_rotas, arquivo_rotas.name)
             st.session_state.tbrs_por_rota = tbrs_por_rota
+            st.session_state.data_arquivo_rotas = data_arquivo
+
+            # Prévia de qual node/dia esse arquivo é, antes de qualquer
+            # outra coisa - pra pegar na hora se subiu arquivo errado.
+            node_texto = node_detectado or "não identificado"
+            data_texto = (
+                data_arquivo.strftime("%d/%m/%Y") if data_arquivo else "não identificada"
+            )
+            st.caption(f"Arquivo lido — Node: **{node_texto}**  ·  Data: **{data_texto}**")
+
+            if node_detectado and node_detectado != NODE_ATUAL:
+                st.warning(
+                    f"O nome do arquivo parece ser do node **{node_detectado}**, "
+                    f"mas essa versão do robô só trata **{NODE_ATUAL}**. Confira "
+                    "se é o arquivo certo antes de seguir."
+                )
+            if data_arquivo and data_arquivo != dt.date.today():
+                st.warning(
+                    f"Esse arquivo é de **{data_texto}**, não é de hoje "
+                    f"({dt.date.today().strftime('%d/%m/%Y')}). Confira se não "
+                    "subiu o arquivo do dia errado antes de seguir."
+                )
         except ValueError as e:
             st.error(str(e))
             st.session_state.tbrs_por_rota = None
+            st.session_state.data_arquivo_rotas = None
 
     if st.session_state.tbrs_por_rota:
         tbrs_por_rota = st.session_state.tbrs_por_rota
@@ -128,9 +164,22 @@ def tela_etapa1():
 
         with col_rotas:
             st.markdown("**Rotas x pacotes**")
-            for rota, v in tbrs_por_rota.items():
-                st.write(f"{rota}: {len(v)}")
             st.caption(f"Total: {len(tbrs_por_rota)} rota(s), {total_rotas} TBR(s)")
+            # Conteúdo centralizado (vertical E horizontal) na caixa -
+            # com poucas rotas (caso comum do LRN9) não fica "grudado"
+            # no canto, sobrando vazio ao redor. O alinhamento horizontal
+            # do st.container sozinho não centraliza o TEXTO dentro da
+            # linha (só centralizaria o bloco, que já ocupa a largura
+            # toda) - por isso o texto vai direto em HTML com
+            # text-align:center.
+            linhas_rotas = "<br>".join(
+                f"{rota}: {len(v)}" for rota, v in tbrs_por_rota.items()
+            )
+            with st.container(border=True, height=320, vertical_alignment="center"):
+                st.markdown(
+                    f"<div style='text-align:center'>{linhas_rotas}</div>",
+                    unsafe_allow_html=True,
+                )
 
             with st.expander("Tem NA para consulta no SCC? (opcional)"):
                 st.text_area(
@@ -143,10 +192,17 @@ def tela_etapa1():
             legenda_na = f" ({total_rotas} + {len(tbrs_na)} de NA)" if tbrs_na else ""
             st.markdown(f"**Lista de TBRs — {total_geral} TBR(s){legenda_na}**")
             st.caption("Ícone de copiar no canto do quadro pega a lista inteira de uma vez.")
-            st.code("\n".join(lista_final), language=None, height=260)
+            # Caixa mais alta - fica mais parecida em altura com o
+            # bloco de upload + rotas ao lado, formando um bloco mais
+            # "quadrado" no geral, em vez de uma tira baixa e larga.
+            st.code("\n".join(lista_final), language=None, height=320)
 
-        st.markdown("**Etapa 2 — CSV do SCC:** cole a lista no SCC, exporte e suba o CSV aqui.")
-        arquivo_csv = st.file_uploader("CSV exportado do SCC", type=["csv"], key="csv_scc")
+        st.write("")
+        col_esq, col_meio, col_dir = st.columns([1, 2, 1])
+        with col_meio:
+            st.markdown("**Etapa 2 — CSV do SCC**")
+            st.caption("Cole a lista no SCC, exporte e suba o CSV aqui.")
+            arquivo_csv = st.file_uploader("CSV exportado do SCC", type=["csv"], key="csv_scc")
         if arquivo_csv is not None:
             st.info(
                 "Arquivo recebido — o processamento da Etapa 2 (classificação "
