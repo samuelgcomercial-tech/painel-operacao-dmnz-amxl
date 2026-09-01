@@ -586,17 +586,19 @@ def tela_etapa1():
                                     for state, itens in grupos.items():
                                         st.markdown(f"**{state}** ({len(itens)} TBR(s))")
                                         # Lista pra copiar e colar de uma vez no SCC -
-                                        # separada por "; " (confirmado que o SCC
-                                        # aceita colar assim, ele extrai só os TBRs
-                                        # válidos e ignora o resto). Sem height= fixo
-                                        # - como fica tudo numa linha só (não quebra
-                                        # sozinha), uma altura fixa só sobrava espaço
-                                        # vazio embaixo; sem ela a caixa se ajusta
-                                        # à própria linha, rolando pro lado se for
-                                        # comprida demais (o ícone de copiar pega a
-                                        # lista inteira de qualquer forma).
+                                        # separada por "," (testado no aparelho real:
+                                        # com ";" o SCC dá erro na busca, só vírgula
+                                        # funciona certo - correção de uma suposição
+                                        # anterior que tinha ficado errada). Sem
+                                        # height= fixo - como fica tudo numa linha só
+                                        # (não quebra sozinha), uma altura fixa só
+                                        # sobrava espaço vazio embaixo; sem ela a
+                                        # caixa se ajusta à própria linha, rolando pro
+                                        # lado se for comprida demais (o ícone de
+                                        # copiar pega a lista inteira de qualquer
+                                        # forma).
                                         st.code(
-                                            "; ".join(r["tbr"] for r in itens),
+                                            ",".join(r["tbr"] for r in itens),
                                             language=None,
                                         )
                                         colunas = st.columns(COLUNAS_POR_LINHA)
