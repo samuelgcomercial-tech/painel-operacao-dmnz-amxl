@@ -537,18 +537,40 @@ def tela_etapa1():
                                     for r in resultado["pendentes"]:
                                         grupos.setdefault(r["state_scc"], []).append(r)
 
+                                    # Grade de 3 colunas pros campos de texto - o rótulo
+                                    # fica só o TBR (o motivo vira dica no ícone de
+                                    # ajuda, "?"), e o texto digitado pode ficar
+                                    # truncado dentro da caixa estreita sem problema
+                                    # (o valor continua salvo inteiro por baixo, só a
+                                    # exibição que corta, igual a lista de TBRs
+                                    # consolidados que também não mostra tudo de uma
+                                    # vez na caixa).
+                                    COLUNAS_POR_LINHA = 3
                                     respostas = {}
                                     for state, itens in grupos.items():
                                         st.markdown(f"**{state}** ({len(itens)} TBR(s))")
+                                        # Lista pra copiar e colar de uma vez no SCC -
+                                        # separada por "; " (confirmado que o SCC
+                                        # aceita colar assim, ele extrai só os TBRs
+                                        # válidos e ignora o resto) - deixa a lista
+                                        # bem mais horizontal/compacta do que um TBR
+                                        # por linha. Ainda com altura máxima (rola
+                                        # por dentro se passar) por segurança em
+                                        # grupos muito grandes - o ícone de copiar
+                                        # sempre pega a lista inteira mesmo assim.
                                         st.code(
-                                            "\n".join(r["tbr"] for r in itens),
+                                            "; ".join(r["tbr"] for r in itens),
                                             language=None,
+                                            height=150,
                                         )
-                                        for r in itens:
-                                            respostas[r["tbr"]] = st.text_input(
-                                                f"{r['tbr']} — {r['motivo_reabertura']}",
-                                                key=f"finalizador_{r['tbr']}",
-                                            )
+                                        colunas = st.columns(COLUNAS_POR_LINHA)
+                                        for i, r in enumerate(itens):
+                                            with colunas[i % COLUNAS_POR_LINHA]:
+                                                respostas[r["tbr"]] = st.text_input(
+                                                    r["tbr"],
+                                                    key=f"finalizador_{r['tbr']}",
+                                                    help=r["motivo_reabertura"],
+                                                )
 
                                     preenchidos = {
                                         tbr: v.strip()
