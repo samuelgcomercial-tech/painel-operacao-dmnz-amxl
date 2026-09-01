@@ -54,6 +54,8 @@ if "tbrs_por_rota" not in st.session_state:
     st.session_state.tbrs_por_rota = None
 if "data_arquivo_rotas" not in st.session_state:
     st.session_state.data_arquivo_rotas = None
+if "node_detectado_rotas" not in st.session_state:
+    st.session_state.node_detectado_rotas = None
 
 
 def vai_para(tela):
@@ -109,50 +111,87 @@ def tela_etapa1():
             f"**Etapa 1 — Consolidar rotas**  ·  {st.session_state.nome_usuario} · {NODE_ATUAL}"
         )
 
-    arquivo_rotas = st.file_uploader(
-        "Arquivo de rotas (dos indianos)", type=["xlsx", "xlsm", "xls"]
-    )
+    # Depois que já leu um arquivo com sucesso, a caixa de upload não
+    # tem mais utilidade na tela - some completamente (os dados já
+    # foram extraídos e continuam guardados). Só um botão pequeno pra
+    # trocar de arquivo, se precisar corrigir.
+    ja_tem_dados = st.session_state.tbrs_por_rota is not None
+    if ja_tem_dados:
+        arquivo_rotas = None
+        if st.button("🔁 Trocar arquivo de rotas"):
+            st.session_state.tbrs_por_rota = None
+            st.session_state.data_arquivo_rotas = None
+            st.session_state.node_detectado_rotas = None
+            st.rerun()
+    else:
+        arquivo_rotas = st.file_uploader(
+            "Arquivo de rotas (dos indianos)", type=["xlsx", "xlsm", "xls"]
+        )
 
     if arquivo_rotas is not None:
-        node_detectado = detecta_node_do_nome(arquivo_rotas.name)
-
         try:
             tbrs_por_rota, data_arquivo = consolida(arquivo_rotas, arquivo_rotas.name)
             st.session_state.tbrs_por_rota = tbrs_por_rota
             st.session_state.data_arquivo_rotas = data_arquivo
-
-            # Prévia de qual node/dia esse arquivo é, antes de qualquer
-            # outra coisa - pra pegar na hora se subiu arquivo errado.
-            node_texto = node_detectado or "não identificado"
-            data_texto = (
-                data_arquivo.strftime("%d/%m/%Y") if data_arquivo else "não identificada"
-            )
-            st.caption(f"Arquivo lido — Node: **{node_texto}**  ·  Data: **{data_texto}**")
-
-            if node_detectado and node_detectado != NODE_ATUAL:
-                st.warning(
-                    f"O nome do arquivo parece ser do node **{node_detectado}**, "
-                    f"mas essa versão do robô só trata **{NODE_ATUAL}**. Confira "
-                    "se é o arquivo certo antes de seguir."
-                )
-            if data_arquivo and data_arquivo != dt.date.today():
-                st.warning(
-                    f"Esse arquivo é de **{data_texto}**, não é de hoje "
-                    f"({dt.date.today().strftime('%d/%m/%Y')}). Confira se não "
-                    "subiu o arquivo do dia errado antes de seguir."
-                )
+            st.session_state.node_detectado_rotas = detecta_node_do_nome(arquivo_rotas.name)
         except ValueError as e:
             st.error(str(e))
             st.session_state.tbrs_por_rota = None
             st.session_state.data_arquivo_rotas = None
+            st.session_state.node_detectado_rotas = None
 
     if st.session_state.tbrs_por_rota:
         tbrs_por_rota = st.session_state.tbrs_por_rota
+        data_arquivo = st.session_state.data_arquivo_rotas
+        node_detectado = st.session_state.node_detectado_rotas
         total_rotas = sum(len(v) for v in tbrs_por_rota.values())
 
-        tbrs_na = le_tbrs_colados(st.session_state.get("texto_na", ""))
+        node_texto = node_detectado or "não identificado"
+        data_texto = data_arquivo.strftime("%d/%m/%Y") if data_arquivo else "não identificada"
+
+        # "Arquivo lido" e "Tem NA" lado a lado, dois retângulos na
+        # mesma linha, em vez de caixa cheia empilhada. Altura FIXA nos
+        # dois (mesmo valor) - senão, quando marca NA e a caixa de
+        # colar aparece, o retângulo da direita fica mais alto que o da
+        # esquerda e perde a simetria.
+        ALTURA_CAIXAS = 170
+        col_info, col_na = st.columns([1, 1], gap="medium")
+        with col_info:
+            with st.container(border=True, height=ALTURA_CAIXAS, vertical_alignment="center"):
+                st.markdown("**Arquivo lido**")
+                st.write(f"Node: **{node_texto}**  ·  Data: **{data_texto}**")
+        with col_na:
+            with st.container(border=True, height=ALTURA_CAIXAS):
+                tem_na = st.checkbox("Tem TBRs de NA para consulta no SCC? (opcional)")
+                if tem_na:
+                    st.text_area(
+                        "Cole os TBRs de NA aqui, um por linha",
+                        key="texto_na",
+                        height=80,
+                        label_visibility="collapsed",
+                    )
+
+        # Se desmarcar de novo, não conta o que tinha digitado antes -
+        # "não tem NA" precisa realmente zerar, mesmo que o texto ainda
+        # esteja guardado por baixo dos panos.
+        tbrs_na = le_tbrs_colados(st.session_state.get("texto_na", "")) if tem_na else []
         lista_final = [tbr for tbrs in tbrs_por_rota.values() for tbr in tbrs] + tbrs_na
         total_geral = len(lista_final)
+
+        # Avisos de node/data errados continuam de largura total, bem
+        # visíveis - não fica escondido dentro de um retângulo pequeno.
+        if node_detectado and node_detectado != NODE_ATUAL:
+            st.warning(
+                f"O nome do arquivo parece ser do node **{node_detectado}**, "
+                f"mas essa versão do robô só trata **{NODE_ATUAL}**. Confira "
+                "se é o arquivo certo antes de seguir."
+            )
+        if data_arquivo and data_arquivo != dt.date.today():
+            st.warning(
+                f"Esse arquivo é de **{data_texto}**, não é de hoje "
+                f"({dt.date.today().strftime('%d/%m/%Y')}). Confira se não "
+                "subiu o arquivo do dia errado antes de seguir."
+            )
 
         # Estilo paisagem: rotas x pacotes numa coluna, lista de TBRs na
         # coluna do lado - em vez de empilhado. Num monitor (o uso real
@@ -179,13 +218,6 @@ def tela_etapa1():
                 st.markdown(
                     f"<div style='text-align:center'>{linhas_rotas}</div>",
                     unsafe_allow_html=True,
-                )
-
-            with st.expander("Tem NA para consulta no SCC? (opcional)"):
-                st.text_area(
-                    "Cole os TBRs de NA aqui, um por linha",
-                    key="texto_na",
-                    height=80,
                 )
 
         with col_lista:
