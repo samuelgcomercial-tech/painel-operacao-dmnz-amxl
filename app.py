@@ -80,12 +80,15 @@ def tela_home():
 # ja na mesma tela, pronto pra quando a etapa 2 existir)
 # ------------------------------------------------------------------
 def tela_etapa1():
-    st.title("Etapa 1 — Consolidar rotas")
-    st.caption(f"Usuário: {st.session_state.nome_usuario}  ·  Node: {NODE_ATUAL}")
-
-    if st.button("← Voltar ao início"):
-        vai_para("home")
-        st.rerun()
+    col_voltar, col_titulo = st.columns([1, 3], vertical_alignment="center")
+    with col_voltar:
+        if st.button("← Voltar"):
+            vai_para("home")
+            st.rerun()
+    with col_titulo:
+        st.markdown(
+            f"**Etapa 1 — Consolidar rotas**  ·  {st.session_state.nome_usuario} · {NODE_ATUAL}"
+        )
 
     arquivo_rotas = st.file_uploader(
         "Arquivo de rotas (dos indianos)", type=["xlsx", "xlsm", "xls"]
@@ -112,41 +115,33 @@ def tela_etapa1():
         total_rotas = sum(len(v) for v in tbrs_por_rota.values())
 
         # PREVIA dos dados lidos, antes de qualquer coisa - padrão do
-        # projeto: sempre mostrar o que foi lido antes de seguir.
-        st.subheader("Resumo do que foi lido")
-        st.write(f"**{len(tbrs_por_rota)} rota(s)**, **{total_rotas} TBR(s)** no total:")
-        st.dataframe(
-            {"Rota": list(tbrs_por_rota.keys()),
-             "TBRs": [len(v) for v in tbrs_por_rota.values()]},
-            hide_index=True, use_container_width=True,
+        # projeto: sempre mostrar o que foi lido antes de seguir. Em
+        # formato de linha só (em vez de tabela) pra não ocupar altura
+        # à toa - com poucas rotas cabe tudo numa linha só.
+        resumo_por_rota = "  ·  ".join(
+            f"{rota}: {len(v)}" for rota, v in tbrs_por_rota.items()
         )
-
-        st.divider()
+        st.caption(
+            f"**Lido:** {len(tbrs_por_rota)} rota(s), {total_rotas} TBR(s) — {resumo_por_rota}"
+        )
 
         with st.expander("Tem NA para consulta no SCC? (opcional)"):
             texto_na = st.text_area(
                 "Cole os TBRs de NA aqui, um por linha",
                 key="texto_na",
-                height=100,
+                height=80,
             )
         tbrs_na = le_tbrs_colados(st.session_state.get("texto_na", ""))
 
         lista_final = [tbr for tbrs in tbrs_por_rota.values() for tbr in tbrs] + tbrs_na
         total_geral = len(lista_final)
 
-        st.subheader(f"Lista consolidada — {total_geral} TBR(s)")
-        if tbrs_na:
-            st.caption(f"({total_rotas} do route planning + {len(tbrs_na)} de NA)")
-        st.caption("Clique no ícone de copiar no canto do quadro abaixo, e cole direto na busca do SCC.")
-        st.code("\n".join(lista_final), language=None)
+        legenda_na = f" ({total_rotas} + {len(tbrs_na)} de NA)" if tbrs_na else ""
+        st.markdown(f"**Lista consolidada — {total_geral} TBR(s){legenda_na}**")
+        st.caption("Ícone de copiar no canto do quadro pega a lista inteira de uma vez.")
+        st.code("\n".join(lista_final), language=None, height=160)
 
-        st.divider()
-
-        st.subheader("Etapa 2 — CSV do SCC")
-        st.write(
-            "Depois de colar a lista acima no SCC e exportar o resultado, "
-            "sobe o CSV aqui em baixo."
-        )
+        st.markdown("**Etapa 2 — CSV do SCC:** cole a lista no SCC, exporte e suba o CSV aqui.")
         arquivo_csv = st.file_uploader("CSV exportado do SCC", type=["csv"], key="csv_scc")
         if arquivo_csv is not None:
             st.info(
