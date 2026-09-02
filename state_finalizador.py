@@ -206,6 +206,39 @@ def resumo_das_por_rota(linhas_csv, base_das):
     return linhas
 
 
+def lista_sem_da_de_verdade(linhas_csv, base_das, motorista_real_da_rota):
+    """Pacotes cujo 'Last Scan By' NAO e um DA de verdade (login de
+    suporte com @, ou nome de sistema tipo LastMileRoutePlanner) - o robo
+    desktop mostra essa lista separada na prevoa final antes de salvar,
+    porque e um caso especial: so cruza com o motorista real da rota (pra
+    saber se conta como DMNZ) quando a entrega foi CONFIRMADA (Delivered)
+    - pra outros states ninguem confirmou quem esta com o pacote de
+    verdade. Mesma logica de monta_coluna_das_dmnz, so que devolvendo uma
+    lista pronta pra mostrar em tabela em vez de um dict tbr->classificacao.
+
+    Devolve lista de dicts {tbr, rota, state_scc, motorista_real_da_rota,
+    das_dmnz} - 'das_dmnz' vem "(não é DMNZ)" quando vazio, só pra não
+    aparecer uma célula em branco confundindo com "ainda não analisado"."""
+    linhas = []
+    for l in linhas_csv:
+        nome_da = (l.get("Last Scan By") or "").strip()
+        if eh_da_de_verdade(nome_da):
+            continue
+        rota = (l.get("Route Code") or "").strip()
+        entregue = (l.get("State") or "").strip().lower() == "delivered"
+        nome_real = motorista_real_da_rota.get(rota, "") if entregue else ""
+        nome_real_norm = normaliza_nome(nome_real) if nome_real else ""
+        classificacao = base_das.get(nome_real_norm, "") if entregue else ""
+        linhas.append({
+            "tbr": l.get("Tracking ID", ""),
+            "rota": rota,
+            "state_scc": l.get("State", ""),
+            "motorista_real_da_rota": nome_real or "?",
+            "das_dmnz": classificacao or "(não é DMNZ)",
+        })
+    return linhas
+
+
 def monta_coluna_das_dmnz(linhas_csv, base_das, motorista_real_da_rota):
     """Monta a coluna final 'DAs DMNZ' pra cada linha do CSV (dict tbr ->
     classificacao). So o Last Scan By de uma entrega CONFIRMADA
