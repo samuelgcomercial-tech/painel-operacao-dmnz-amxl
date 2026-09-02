@@ -563,6 +563,14 @@ def tela_etapa1():
                                     "de revisão."
                                 )
 
+                                # Reaproveitados do histórico ficam só no
+                                # número do resumo acima (sem listar um a
+                                # um) - ao contrário de "sem DA vinculado" ou
+                                # dos pendentes, esses não pedem nenhuma ação
+                                # do usuário (nada mudou neles), então uma
+                                # caixinha a mais só ocuparia espaço na tela
+                                # sem ajudar em nada.
+
                                 if not resultado["pendentes"]:
                                     st.success(
                                         "Nenhum TBR pendente de revisão manual hoje."
