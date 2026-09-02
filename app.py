@@ -32,7 +32,7 @@ from base_das import (
 from github_store import ConflitoDeSalvamento, le_arquivo, salva_arquivo, secrets_configurados
 from historico_tbr import atualiza_base, gera_csv_historico, parseia_texto_historico
 from state_finalizador import processa as processa_state_finalizador
-from state_finalizador import resumo_das_por_rota
+from state_finalizador import resumo_das_por_rota, lista_sem_da_de_verdade
 
 NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
 
@@ -514,6 +514,41 @@ def tela_etapa1():
                                         hide_index=True,
                                     )
 
+                                # Pacotes sem DA de verdade vinculado (login
+                                # de suporte tipo e-mail, ou nome de sistema)
+                                # - o robô desktop mostra isso separado na
+                                # prévia final, igual aqui. Cruza com o
+                                # motorista real da rota só quando a entrega
+                                # foi confirmada (Delivered) - pros outros
+                                # states ninguém confirmou quem está com o
+                                # pacote de verdade.
+                                sem_da = lista_sem_da_de_verdade(
+                                    linhas_csv, base_dict,
+                                    resultado["motorista_real_da_rota"],
+                                )
+                                if sem_da:
+                                    with st.expander(
+                                        f"📋 Pacotes sem DA de verdade vinculado "
+                                        f"(login de suporte/sistema) "
+                                        f"— {len(sem_da)} registro(s)"
+                                    ):
+                                        st.dataframe(
+                                            [
+                                                {
+                                                    "TBR": r["tbr"],
+                                                    "Rota": r["rota"],
+                                                    "State": r["state_scc"],
+                                                    "Motorista real da rota": (
+                                                        r["motorista_real_da_rota"]
+                                                    ),
+                                                    "DAs DMNZ": r["das_dmnz"],
+                                                }
+                                                for r in sem_da
+                                            ],
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
+
                                 st.markdown("**State Finalizador (por TBR)**")
                                 st.write(
                                     f"**{len(resultado['entregues'])} entregue(s)** "
@@ -536,6 +571,23 @@ def tela_etapa1():
                                         resultado["auto_em_rota"]
                                         + resultado["auto_sem_state"]
                                     )
+                                    if automaticos_sem_pendentes:
+                                        with st.expander(
+                                            f"👁️ Prévia — {len(automaticos_sem_pendentes)} "
+                                            "TBR(s) que serão salvos no histórico"
+                                        ):
+                                            st.dataframe(
+                                                [
+                                                    {
+                                                        "TBR": r["tbr"],
+                                                        "State Finalizador": r["resposta"],
+                                                        "State SCC": r["state_scc"],
+                                                    }
+                                                    for r in automaticos_sem_pendentes
+                                                ],
+                                                use_container_width=True,
+                                                hide_index=True,
+                                            )
                                     if automaticos_sem_pendentes and st.button(
                                         "💾 Confirmar e salvar histórico",
                                         key="salvar_historico_sem_pendentes",
@@ -630,16 +682,40 @@ def tela_etapa1():
                                             "continuam pendentes pra próxima vez."
                                         )
 
-                                    if preenchidos:
+                                    # Prévia mostra TUDO que vai ser processado e
+                                    # salvo nessa confirmação - os automáticos (em
+                                    # rota / sem state) junto com o que acabou de
+                                    # ser digitado, com uma coluna "Origem" pra
+                                    # diferenciar - não só o que foi digitado
+                                    # agora, senão o usuário não teria o vislumbre
+                                    # completo antes de confirmar.
+                                    automaticos = (
+                                        resultado["auto_em_rota"]
+                                        + resultado["auto_sem_state"]
+                                    )
+                                    linhas_previa = [
+                                        {
+                                            "TBR": r["tbr"],
+                                            "State Finalizador": r["resposta"],
+                                            "Origem": "Automático",
+                                        }
+                                        for r in automaticos
+                                    ] + [
+                                        {
+                                            "TBR": tbr,
+                                            "State Finalizador": v,
+                                            "Origem": "Digitado agora",
+                                        }
+                                        for tbr, v in preenchidos.items()
+                                    ]
+
+                                    if linhas_previa:
                                         with st.expander(
-                                            f"Prévia — {len(preenchidos)} TBR(s) que "
-                                            "serão salvos"
+                                            f"👁️ Prévia — {len(linhas_previa)} TBR(s) "
+                                            "que serão salvos no histórico"
                                         ):
                                             st.dataframe(
-                                                [
-                                                    {"TBR": tbr, "State Finalizador": v}
-                                                    for tbr, v in preenchidos.items()
-                                                ],
+                                                linhas_previa,
                                                 use_container_width=True,
                                                 hide_index=True,
                                             )
@@ -649,10 +725,7 @@ def tela_etapa1():
                                             key="salvar_historico",
                                             use_container_width=True,
                                         ):
-                                            for r in (
-                                                resultado["auto_em_rota"]
-                                                + resultado["auto_sem_state"]
-                                            ):
+                                            for r in automaticos:
                                                 atualiza_base(
                                                     base_tbr, r["tbr"], r["resposta"],
                                                     r["state_scc"], data_hoje_str,
@@ -671,7 +744,7 @@ def tela_etapa1():
                                                     sha_historico,
                                                     mensagem=(
                                                         f"Atualiza State Finalizador de "
-                                                        f"{len(preenchidos)} TBR(s)"
+                                                        f"{len(linhas_previa)} TBR(s)"
                                                     ),
                                                 )
                                             except ConflitoDeSalvamento:
@@ -687,7 +760,7 @@ def tela_etapa1():
                                             else:
                                                 st.success(
                                                     f"Histórico atualizado! "
-                                                    f"{len(preenchidos)} TBR(s) "
+                                                    f"{len(linhas_previa)} TBR(s) "
                                                     "salvo(s)."
                                                 )
                                                 st.rerun()
