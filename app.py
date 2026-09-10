@@ -35,6 +35,7 @@ from state_finalizador import processa as processa_state_finalizador
 from state_finalizador import resumo_das_por_rota, lista_sem_da_de_verdade
 from calculo_fechamento import calcula_tudo, monta_dados_do_dia
 from dashboard_fechamento import gera_html_fechamento
+import parceiros as parceiros_mod
 
 NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
 
@@ -42,6 +43,7 @@ NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
 # mesmo padrão já decidido pros arquivos de memória entre dias (dados_nodes/<NODE>/).
 CAMINHO_BASE_DAS = f"dados_nodes/{NODE_ATUAL}/base_das_dmnz.csv"
 CAMINHO_HISTORICO_TBR = f"dados_nodes/{NODE_ATUAL}/historico_scc_analise.csv"
+CAMINHO_PARCEIROS = f"dados_nodes/{NODE_ATUAL}/parceiros.csv"
 
 st.set_page_config(page_title="Painel Operação DMNZ - AMXL", page_icon="📦", layout="wide")
 
@@ -128,6 +130,11 @@ def tela_home():
                    help="Ainda não construído — em breve.")
         st.button("🔄 Editar Reversa", use_container_width=True, disabled=True,
                    help="Ainda não construído — em breve.")
+
+    st.divider()
+    if st.button("⚙️ Parceiros cadastrados", use_container_width=True):
+        vai_para("parceiros")
+        st.rerun()
 
 
 # ------------------------------------------------------------------
@@ -984,6 +991,108 @@ def tela_fechamento_final():
 
 
 # ------------------------------------------------------------------
+# PARCEIROS DO NODE — cadastro de quem atua na base (a própria empresa +
+# parceiros terceirizados). Ainda NÃO é usado em nenhum cálculo — é só a
+# base de dados sendo montada agora; o dropdown do State Finalizador e o
+# alerta de "insucesso sem parceiro especificado" entram numa próxima
+# etapa, depois de confirmar que esse cadastro está funcionando.
+# ------------------------------------------------------------------
+def tela_parceiros():
+    col_voltar, col_titulo = st.columns([1, 3], vertical_alignment="center")
+    with col_voltar:
+        if st.button("← Voltar"):
+            vai_para("home")
+            st.rerun()
+    with col_titulo:
+        st.markdown(f"**Parceiros cadastrados — {NODE_ATUAL}**")
+
+    st.caption(
+        "Quem atua nessa base hoje: a própria empresa (o nome que vocês "
+        "usam pra ela, ex: DMNZ) e os parceiros terceirizados (ex: MRIZ). "
+        "Isso ainda não muda nada nos cálculos — é só o cadastro sendo "
+        "criado; o resto (dropdown do State Finalizador, alerta de "
+        "insucesso sem parceiro) vem depois."
+    )
+
+    if not secrets_configurados():
+        st.warning(
+            "Ainda não dá pra salvar isso — falta o secret `github` "
+            "configurado no Streamlit Cloud."
+        )
+        return
+
+    try:
+        texto_parceiros, sha_parceiros = le_arquivo(CAMINHO_PARCEIROS)
+        lista_parceiros = parceiros_mod.parseia_texto_parceiros(texto_parceiros)
+    except Exception as e:
+        st.error(f"Não consegui ler os parceiros no GitHub: {e}")
+        return
+
+    st.markdown("**Cadastrados atualmente**")
+    if lista_parceiros:
+        st.dataframe(
+            [
+                {
+                    "Nome": p["nome"],
+                    "Própria empresa?": "Sim" if p["propria_empresa"] else "Não",
+                }
+                for p in lista_parceiros
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info(
+            f"Ainda não tem nenhum parceiro cadastrado pra {NODE_ATUAL}. "
+            "Preenche abaixo pra começar — dá pra editar depois, isso "
+            "nunca fica travado."
+        )
+
+    st.divider()
+    st.markdown("**Adicionar parceiro**")
+    nome_novo = st.text_input(
+        "Nome (como deve aparecer no dropdown, ex: DMNZ, Dominalog, MRIZ...)",
+        key="novo_parceiro_nome",
+    )
+    eh_propria = st.checkbox(
+        "É a própria empresa (não é terceirizado)",
+        key="novo_parceiro_propria",
+    )
+
+    if st.button("➕ Adicionar", key="add_parceiro", use_container_width=True):
+        nome_norm_novo = parceiros_mod.normaliza(nome_novo)
+        ja_marcado_propria = parceiros_mod.nome_propria_empresa(lista_parceiros)
+        if not nome_novo.strip():
+            st.warning("Digita um nome antes de adicionar.")
+        elif any(nome_norm_novo == parceiros_mod.normaliza(p["nome"]) for p in lista_parceiros):
+            st.warning(f"'{nome_novo}' já está cadastrado.")
+        elif eh_propria and ja_marcado_propria:
+            st.warning(
+                f"Já tem **{ja_marcado_propria}** marcado como própria "
+                "empresa — só pode ter um. Ainda não dá pra editar/remover "
+                "marcação por aqui; me avisa se precisar trocar."
+            )
+        else:
+            nova_lista = lista_parceiros + [
+                {"nome": nome_novo.strip(), "propria_empresa": eh_propria}
+            ]
+            try:
+                salva_arquivo(
+                    CAMINHO_PARCEIROS,
+                    parceiros_mod.gera_csv_parceiros(nova_lista),
+                    sha_parceiros,
+                    mensagem=f"Adiciona parceiro: {nome_novo.strip()}",
+                )
+            except ConflitoDeSalvamento:
+                st.error("Alguém salvou ao mesmo tempo. Toca em Adicionar de novo.")
+            except Exception as e:
+                st.error(f"Não consegui salvar no GitHub: {e}")
+            else:
+                st.success(f"'{nome_novo.strip()}' adicionado!")
+                st.rerun()
+
+
+# ------------------------------------------------------------------
 # ROTEADOR
 # ------------------------------------------------------------------
 if st.session_state.tela == "home":
@@ -994,4 +1103,6 @@ elif st.session_state.tela == "previa_fechamento":
     tela_previa_fechamento()
 elif st.session_state.tela == "fechamento_final":
     tela_fechamento_final()
+elif st.session_state.tela == "parceiros":
+    tela_parceiros()
 
