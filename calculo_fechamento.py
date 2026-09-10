@@ -205,6 +205,20 @@ def monta_observacoes(dados, node, parceiros):
     if frase_mnr:
         frases.append(frase_mnr)
 
+    # Pct de NA cuja rota a Amazon já atribuiu (state_finalizador.py,
+    # "PCT NA - <rota>") - só acompanhamento do dia (não é insucesso nem
+    # confirma DMNZ/parceiro), mas lista os TBRs pra não ficar escondido
+    # dia após dia (mesmo limite de 10 do aviso de auditoria, por
+    # consistência). Só entra aqui quem já saiu de "pendente" (a versão
+    # sem Route Code continua pedindo revisão manual - ver eh_na_com_rota).
+    pct_na = [r["tbr"] for r in dados if r["finalizador"].upper().startswith("PCT NA")]
+    if pct_na:
+        frases.append(
+            f"{len(pct_na)} pct(s) de NA em acompanhamento "
+            f"({', '.join(pct_na[:10])}"
+            + (", ..." if len(pct_na) > 10 else "") + ")"
+        )
+
     texto = ", ".join(frases) + "."
     return texto[0].upper() + texto[1:]
 
