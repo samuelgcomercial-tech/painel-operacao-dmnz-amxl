@@ -500,6 +500,18 @@ def tela_etapa1():
                                 base_tbr, sha_historico = {}, None
                             else:
                                 data_hoje_str = dt.date.today().strftime("%d/%m/%Y")
+                                # Não bloqueia o fluxo se der erro/estiver
+                                # vazio - cai pro comportamento antigo
+                                # dentro de classifica_insucesso (ver
+                                # calculo_fechamento.py). Cadastro ainda é
+                                # opcional, não é pré-requisito pra fechar o dia.
+                                try:
+                                    texto_parceiros, _ = le_arquivo(CAMINHO_PARCEIROS)
+                                    lista_parceiros = parceiros_mod.parseia_texto_parceiros(
+                                        texto_parceiros
+                                    )
+                                except Exception:
+                                    lista_parceiros = []
                                 resultado = processa_state_finalizador(
                                     linhas_csv, base_tbr, base_dict, data_hoje_str
                                 )
@@ -655,7 +667,7 @@ def tela_etapa1():
                                                 linhas_csv, base_tbr, base_dict,
                                                 resultado["motorista_real_da_rota"],
                                             )
-                                            st.session_state.dados_fechamento = calcula_tudo(dados_dia, NODE_ATUAL)
+                                            st.session_state.dados_fechamento = calcula_tudo(dados_dia, NODE_ATUAL, lista_parceiros)
                                             vai_para("previa_fechamento")
                                             st.rerun()
                                     elif st.button(
@@ -670,7 +682,7 @@ def tela_etapa1():
                                             linhas_csv, base_tbr, base_dict,
                                             resultado["motorista_real_da_rota"],
                                         )
-                                        st.session_state.dados_fechamento = calcula_tudo(dados_dia, NODE_ATUAL)
+                                        st.session_state.dados_fechamento = calcula_tudo(dados_dia, NODE_ATUAL, lista_parceiros)
                                         vai_para("previa_fechamento")
                                         st.rerun()
                                 else:
@@ -815,7 +827,7 @@ def tela_etapa1():
                                                     linhas_csv, base_tbr, base_dict,
                                                     resultado["motorista_real_da_rota"],
                                                 )
-                                                st.session_state.dados_fechamento = calcula_tudo(dados_dia, NODE_ATUAL)
+                                                st.session_state.dados_fechamento = calcula_tudo(dados_dia, NODE_ATUAL, lista_parceiros)
                                                 vai_para("previa_fechamento")
                                                 st.rerun()
 
@@ -919,14 +931,24 @@ def tela_previa_fechamento():
         )
 
     with col3:
-        linhas4 = ""
-        if r["n_insucesso_dmnz"]:
-            linhas4 += _linha_painel("Insucesso DMNZ", r["n_insucesso_dmnz"])
-        if r["n_insucesso_parceiro"]:
-            linhas4 += _linha_painel("Insucesso Parceiro", r["n_insucesso_parceiro"])
-        if r["n_insucesso_sem_detalhe"]:
-            linhas4 += _linha_painel("Insucesso (sem detalhe)", r["n_insucesso_sem_detalhe"])
-        if not linhas4:
+        # "sem_detalhe" (texto que nao citou nenhum parceiro cadastrado)
+        # aparece por ultimo de proposito, mesmo que tenha mais TBRs que
+        # os nomeados - eh o caso que precisa de atencao/correcao, faz
+        # sentido ficar destacado no fim, nao competindo por ordem com os
+        # nomes de verdade.
+        itens_insucesso = sorted(
+            r["contagem_insucesso"].items(),
+            key=lambda kv: (kv[0] == "sem_detalhe", -kv[1]),
+        )
+        if itens_insucesso:
+            linhas4 = "".join(
+                _linha_painel(
+                    "Insucesso (sem detalhe)" if nome == "sem_detalhe" else f"Insucesso {nome}",
+                    qtd,
+                )
+                for nome, qtd in itens_insucesso
+            )
+        else:
             linhas4 = _linha_painel("Sem registros", "-")
         st.markdown(_painel("4. ANÁLISE INSUCESSO", linhas4), unsafe_allow_html=True)
 
