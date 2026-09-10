@@ -92,6 +92,44 @@ def eh_outro_node(reason):
     return (reason or "").strip() == "Wrong Node"
 
 
+TEXTO_NA_PREFIXO = "PCT NA"
+
+
+def eh_na_com_rota(last_scan_by, route_code):
+    """Pacote de NA (Last Scan By == 'None', mesmo critério EXATO de
+    eh_da_de_verdade) cuja rota a equipe Amazon JÁ atribuiu (Route Code
+    preenchido no CSV) - classifica automático, só de acompanhamento do
+    dia, como 'PCT NA - <rota>'. Não afirma DMNZ nem parceiro nenhum (o
+    pacote não passou pela equipe da noite, não tem como saber de quem
+    é) - é só uma etiqueta de rastreio, igual 'EM ROTA' não conta como
+    insucesso (ver eh_insucesso em calculo_fechamento.py).
+
+    Usada só como FALLBACK - ver 'precisa_validacao_na' em processa()
+    pro caminho principal (nodes com muito volume de NA - o Samuel
+    apontou que o Route Code do CSV nem sempre vem preenchido nesses
+    casos, então depender só dele é restritivo demais; a validação
+    manual com lista suspensa cobre o grosso, isso aqui só pega quem
+    escapou por algum motivo - ex: TBR de NA que não foi colado na
+    caixinha da Etapa 1, mas mesmo assim aparece com rota no CSV)."""
+    eh_none = (last_scan_by or "").strip().lower() == "none"
+    return eh_none and bool((route_code or "").strip())
+
+
+def opcoes_da_rota_do_dia(linhas_csv):
+    """Pares (nome, rota) distintos de todo DA de verdade que rodou hoje -
+    alimenta a lista suspensa da validação manual de NA (ver
+    'precisa_validacao_na' em processa()): o usuário escolhe quem já
+    pegou aquele pacote NA dentre quem já apareceu no CSV de hoje, em
+    vez de digitar/adivinhar. Ordenado por nome, sem duplicar."""
+    pares = set()
+    for l in linhas_csv:
+        nome = (l.get("Last Scan By") or "").strip()
+        rota = (l.get("Route Code") or "").strip()
+        if rota and eh_da_de_verdade(nome):
+            pares.add((nome, rota))
+    return sorted(pares)
+
+
 def eh_mudanca_suspeita_de_sistema(motivo_reabertura, last_scan_by):
     """Alerta (não muda classificação nenhuma, só avisa): o state desse
     TBR MUDOU desde a última vez que vimos ele (motivo_reabertura começa
@@ -120,10 +158,18 @@ def eh_state_auto_em_rota(state_scc, last_scan_by):
     return eh_in_transit_ou_failed and eh_da_de_verdade(last_scan_by)
 
 
-def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
+def processa(linhas_csv, base_tbr, base_das, data_hoje_str, tbrs_marcados_na=None):
     """Centraliza o processamento do State Finalizador pra todas as linhas
     do CSV de hoje. Nao decide nada sozinho sobre o que precisa de
     revisao manual - so separa e devolve pra tela perguntar.
+
+    tbrs_marcados_na: TBRs que o usuário colou na caixinha "Tem TBRs de
+    NA" da Etapa 1 (ver app.py) - só isso já basta pra pedir validação
+    manual assim que o TBR voltar do SCC ainda sem motorista confirmado,
+    SEM depender do Route Code do CSV vir preenchido (regra menos
+    restritiva, pedida pelo Samuel pra nodes com volume alto de NA - ver
+    'precisa_validacao_na' abaixo). Se vier None/vazio, ninguém cai
+    nessa categoria (comportamento equivalente a antes dessa mudança).
 
     Devolve um dict:
       - entregues: linhas com State=Delivered (State Finalizador = "Entregue" automatico)
@@ -132,6 +178,16 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
       - auto_outro_node: pacote de outro node (Reason=Wrong Node - sinal
         explícito da Amazon; ver eh_outro_node pra entender por que NÃO
         usamos o campo Station pra tentar adivinhar qual node)
+      - precisa_validacao_na: TBR marcado como NA na Etapa 1 que ainda
+        não voltou com motorista confirmado - a tela oferece uma lista
+        suspensa (motorista + rota de quem já apareceu hoje, ver
+        opcoes_da_rota_do_dia) pro usuário escolher quem pegou; ao
+        escolher, vira "EM ROTA - DMNZ/PARCEIRO" igual qualquer outro
+        TBR em rota (usa classifica_dmnz_ou_parceiro)
+      - auto_na: fallback de eh_na_com_rota - TBR de NA com rota já no
+        CSV mas que NÃO estava em tbrs_marcados_na (escapou da caixinha
+        da Etapa 1 por algum motivo) - "PCT NA - <rota>", só
+        acompanhamento do dia, sem afirmar DMNZ/parceiro
       - conhecidos: lista de dicts (do historico) reaproveitados sem mudanca
       - pendentes: lista de dicts {tbr, state_scc, motivo_reabertura, last_scan_by, route_code}
         agrupaveis por state_scc - precisam de revisao manual na tela
@@ -139,6 +195,7 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
         a coluna final "DAs DMNZ")
     """
     motorista_real_da_rota = calcula_motorista_real_da_rota(linhas_csv)
+    tbrs_marcados_na = set(tbrs_marcados_na or [])
 
     entregues = [l for l in linhas_csv if (l.get("State") or "").strip().lower() == "delivered"]
     nao_entregues_raw = [l for l in linhas_csv if (l.get("State") or "").strip().lower() != "delivered"]
@@ -161,6 +218,8 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
     auto_sem_state = []
     auto_cancelado = []
     auto_outro_node = []
+    auto_na = []
+    precisa_validacao_na = []
     pendentes = []
     for r in reabrir:
         if eh_state_vazio(r["state_scc"]):
@@ -170,10 +229,29 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
         elif eh_outro_node(r["reason"]):
             auto_outro_node.append({**r, "resposta": "PCT OUTRO NODE"})
         elif eh_state_auto_em_rota(r["state_scc"], r["last_scan_by"]):
+            # Já tem motorista de verdade confirmado (Last Scan By não é
+            # mais "None"/sistema) - mesmo que esse TBR tenha vindo da
+            # caixinha de NA, não precisa mais de validação manual
+            # nenhuma, segue o fluxo normal de "EM ROTA".
             classificacao = classifica_dmnz_ou_parceiro(
                 r["last_scan_by"], r["route_code"], base_das, motorista_real_da_rota
             )
             auto_em_rota.append({**r, "resposta": f"EM ROTA - {classificacao}"})
+        elif r["tbr"] in tbrs_marcados_na:
+            precisa_validacao_na.append(r)
+        elif eh_na_com_rota(r["last_scan_by"], r["route_code"]):
+            # Igual ao alerta dos pendentes (mesma função) - mesmo sendo
+            # automático, se o state mudou desde ontem SEM vir de
+            # motorista de verdade, ainda vale desconfiar (o sistema
+            # pode estar reprocessando sozinho, igual o caso do
+            # TBR353806057) - só que aqui não bloqueia, só acompanha.
+            auto_na.append({
+                **r,
+                "resposta": f"{TEXTO_NA_PREFIXO} - {r['route_code']}",
+                "alerta_sistemico": eh_mudanca_suspeita_de_sistema(
+                    r.get("motivo_reabertura", ""), r["last_scan_by"]
+                ),
+            })
         else:
             # Só marca o alerta - não muda em nada pra onde o TBR vai
             # (continua pendente, precisando de revisão manual do
@@ -189,6 +267,8 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
         "auto_sem_state": auto_sem_state,
         "auto_cancelado": auto_cancelado,
         "auto_outro_node": auto_outro_node,
+        "auto_na": auto_na,
+        "precisa_validacao_na": precisa_validacao_na,
         "conhecidos": conhecidos,
         "pendentes": pendentes,
         "motorista_real_da_rota": motorista_real_da_rota,
