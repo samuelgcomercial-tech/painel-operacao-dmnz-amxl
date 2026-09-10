@@ -35,11 +35,32 @@ def normaliza_nome(nome):
 
 
 def eh_da_de_verdade(last_scan_by):
-    """Mesma regra do robo desktop: login de suporte (tem @) ou nome de
-    sistema nao conta como DA de verdade."""
+    """Mesma regra do robo desktop (login de suporte com @, ou nome de
+    sistema, nao conta como DA de verdade) + dois casos que o Samuel
+    apontou, os dois com a mesma explicacao de fundo: o SCC registra um
+    valor de SISTEMA no Last Scan By enquanto o pacote ainda nao tem um
+    motorista de verdade confirmado - o nome real só aparece na leitura
+    SEGUINTE (a de entrega, ou a de falha na entrega). Até lá, esse TBR
+    fica sem DA de verdade vinculado (mesmo tratamento que já existia
+    pro login de suporte), em vez de arriscar cravar um motorista
+    errado:
+
+      - login comecando com "P2P" (ex:
+        "P2PTransportRequestAssignmentService") - rota dividida, outro
+        motorista "puxou" o pacote pra si no meio do caminho.
+      - "None" (igualdade EXATA, nao "contém" - pra nao arriscar
+        excluir por engano um motorista de verdade cujo nome tenha essa
+        sequencia de letras) - pacote de NA (nao foi manifestado/nao foi
+        recebido nem atribuido a rota pela equipe da noite, que nem
+        consegue nesse caso) cuja rota foi atribuida direto pela equipe
+        da Amazon."""
     if not last_scan_by:
         return False
     if "@" in last_scan_by:
+        return False
+    if last_scan_by.strip().upper().startswith("P2P"):
+        return False
+    if last_scan_by.strip().lower() == "none":
         return False
     if normaliza_nome(last_scan_by) in NOMES_SISTEMA:
         return False
