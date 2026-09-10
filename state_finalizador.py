@@ -65,6 +65,48 @@ def eh_state_vazio(state_scc):
     return not (state_scc or "").strip()
 
 
+TEXTO_CANCELADO_ANTES_ROTA = "CANCELADO - CLIENTE"
+
+
+def eh_cancelado_antes_da_rota(operation):
+    """Campo 'Operation' do CSV do SCC vindo 'CANCELLED' - o próprio
+    cliente cancelou ANTES do pacote ir pra rua, então nunca chega a ser
+    atribuído a rota nenhuma (nem DMNZ nem parceiro). Sinal confiável
+    (campo dedicado, não texto livre) - apontado pelo Samuel."""
+    return (operation or "").strip().upper() == "CANCELLED"
+
+
+def eh_outro_node(reason):
+    """Campo 'Reason' do CSV vindo 'Wrong Node' - sinal EXPLÍCITO da
+    Amazon (não inferido) de que o pacote é de outro node de verdade.
+
+    IMPORTANTE - tentativa anterior removida de propósito: cheguei a usar
+    o campo 'Station' pra tentar identificar QUAL node (ex: 'LFO9'),
+    mas o Samuel investigou um caso real (TBR353806057) onde o Station
+    mostrava 'LFO9' e mesmo assim o pacote era NOSSO (zona de entrega
+    Natal) - o Station tinha mudado só por causa de um pulo de
+    processamento (pacote expedido sem destino, o LastMileRoutePlanner
+    fica tentando rotear ele em qualquer lugar). Ou seja, Station NÃO é
+    confiável pra essa decisão - só o Reason explícito é. Por isso aqui
+    marca só como "PCT OUTRO NODE" (sem tentar adivinhar qual node)."""
+    return (reason or "").strip() == "Wrong Node"
+
+
+def eh_mudanca_suspeita_de_sistema(motivo_reabertura, last_scan_by):
+    """Alerta (não muda classificação nenhuma, só avisa): o state desse
+    TBR MUDOU desde a última vez que vimos ele (motivo_reabertura começa
+    com "state mudou") E a leitura nova NÃO veio de um motorista de
+    verdade (last_scan_by é valor de sistema: suporte/@,
+    LastMileRoutePlanner, P2P..., "None"). Isso é um sinal de que a
+    mudança pode ter sido só o próprio sistema do SCC reprocessando o
+    pacote sozinho (ex: TBR353806057, que fica preso girando em Route
+    Assignment sem nenhum motorista confirmar nada de verdade), e não um
+    progresso real na entrega - vale conferir com mais atenção antes de
+    classificar. Caso pontual investigado pelo Samuel, generalizado
+    aqui."""
+    return motivo_reabertura.startswith("state mudou") and not eh_da_de_verdade(last_scan_by)
+
+
 def eh_state_auto_em_rota(state_scc, last_scan_by):
     """States que o robo classifica sozinho (sem perguntar) quando ja tem
     um DA de verdade vinculado: 'EM ROTA - DMNZ' ou 'EM ROTA - PARCEIRO'.
@@ -86,6 +128,10 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
     Devolve um dict:
       - entregues: linhas com State=Delivered (State Finalizador = "Entregue" automatico)
       - auto_em_rota: lista de dicts {tbr, resposta, last_scan_by, route_code} - EM ROTA automatico
+      - auto_cancelado: cancelado pelo cliente ANTES de ir pra rota (Operation=CANCELLED)
+      - auto_outro_node: pacote de outro node (Reason=Wrong Node - sinal
+        explícito da Amazon; ver eh_outro_node pra entender por que NÃO
+        usamos o campo Station pra tentar adivinhar qual node)
       - conhecidos: lista de dicts (do historico) reaproveitados sem mudanca
       - pendentes: lista de dicts {tbr, state_scc, motivo_reabertura, last_scan_by, route_code}
         agrupaveis por state_scc - precisam de revisao manual na tela
@@ -102,6 +148,9 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
             "state_scc": l["State"],
             "last_scan_by": (l.get("Last Scan By") or "").strip(),
             "route_code": (l.get("Route Code") or "").strip(),
+            "operation": (l.get("Operation") or "").strip(),
+            "reason": (l.get("Reason") or "").strip(),
+            "station": (l.get("Station") or "").strip(),
         }
         for l in nao_entregues_raw
     ]
@@ -110,22 +159,36 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str):
 
     auto_em_rota = []
     auto_sem_state = []
+    auto_cancelado = []
+    auto_outro_node = []
     pendentes = []
     for r in reabrir:
         if eh_state_vazio(r["state_scc"]):
             auto_sem_state.append({**r, "resposta": "SEM STATE SCC"})
+        elif eh_cancelado_antes_da_rota(r["operation"]):
+            auto_cancelado.append({**r, "resposta": TEXTO_CANCELADO_ANTES_ROTA})
+        elif eh_outro_node(r["reason"]):
+            auto_outro_node.append({**r, "resposta": "PCT OUTRO NODE"})
         elif eh_state_auto_em_rota(r["state_scc"], r["last_scan_by"]):
             classificacao = classifica_dmnz_ou_parceiro(
                 r["last_scan_by"], r["route_code"], base_das, motorista_real_da_rota
             )
             auto_em_rota.append({**r, "resposta": f"EM ROTA - {classificacao}"})
         else:
-            pendentes.append(r)
+            # Só marca o alerta - não muda em nada pra onde o TBR vai
+            # (continua pendente, precisando de revisão manual do
+            # Samuel do mesmo jeito). É só um aviso a mais na tela.
+            suspeito = eh_mudanca_suspeita_de_sistema(
+                r.get("motivo_reabertura", ""), r["last_scan_by"]
+            )
+            pendentes.append({**r, "alerta_sistemico": suspeito})
 
     return {
         "entregues": entregues,
         "auto_em_rota": auto_em_rota,
         "auto_sem_state": auto_sem_state,
+        "auto_cancelado": auto_cancelado,
+        "auto_outro_node": auto_outro_node,
         "conhecidos": conhecidos,
         "pendentes": pendentes,
         "motorista_real_da_rota": motorista_real_da_rota,
