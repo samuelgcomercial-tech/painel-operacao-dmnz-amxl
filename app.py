@@ -32,7 +32,12 @@ from base_das import (
 from github_store import ConflitoDeSalvamento, le_arquivo, salva_arquivo, secrets_configurados
 from historico_tbr import atualiza_base, gera_csv_historico, parseia_texto_historico
 from state_finalizador import processa as processa_state_finalizador
-from state_finalizador import resumo_das_por_rota, lista_sem_da_de_verdade
+from state_finalizador import (
+    resumo_das_por_rota,
+    lista_sem_da_de_verdade,
+    opcoes_da_rota_do_dia,
+    classifica_dmnz_ou_parceiro,
+)
 from calculo_fechamento import calcula_tudo, monta_dados_do_dia
 from dashboard_fechamento import gera_html_fechamento
 import parceiros as parceiros_mod
@@ -513,7 +518,8 @@ def tela_etapa1():
                                 except Exception:
                                     lista_parceiros = []
                                 resultado = processa_state_finalizador(
-                                    linhas_csv, base_tbr, base_dict, data_hoje_str
+                                    linhas_csv, base_tbr, base_dict, data_hoje_str,
+                                    tbrs_marcados_na=tbrs_na,
                                 )
 
                                 # Conferência manual: DA de cada rota, pra
@@ -598,6 +604,10 @@ def tela_etapa1():
                                     "(automático, antes da rota) · "
                                     f"**{len(resultado['auto_outro_node'])} outro node** "
                                     "(automático) · "
+                                    f"**{len(resultado['auto_na'])} NA c/ rota** "
+                                    "(automático, acompanhamento) · "
+                                    f"**{len(resultado['precisa_validacao_na'])} NA** "
+                                    "(validar motorista) · "
                                     f"**{len(resultado['conhecidos'])} reaproveitado(s)** "
                                     "do histórico · "
                                     f"**{len(resultado['pendentes'])} pendente(s)** "
@@ -612,7 +622,35 @@ def tela_etapa1():
                                 # caixinha a mais só ocuparia espaço na tela
                                 # sem ajudar em nada.
 
-                                if not resultado["pendentes"]:
+                                # Alerta (só aviso, não muda pra onde o TBR vai) pros
+                                # TBRs (pendentes OU já classificados automático como
+                                # NA) cujo state mudou desde a última vez SEM ter
+                                # vindo de um motorista de verdade - pode ser só o
+                                # próprio sistema do SCC reprocessando sozinho (caso
+                                # investigado pelo Samuel: TBR353806057, preso
+                                # girando em Route Assignment sem confirmação de
+                                # ninguém). Calculado ANTES do if/else porque pode
+                                # acontecer mesmo sem nenhum pendente sobrando (só
+                                # com NA automático).
+                                suspeitos = [
+                                    r for r in resultado["pendentes"] + resultado["auto_na"]
+                                    if r.get("alerta_sistemico")
+                                ]
+                                if suspeitos:
+                                    st.warning(
+                                        f"⚠️ {len(suspeitos)} TBR(s) com mudança de "
+                                        "state que parece ter vindo do próprio "
+                                        "sistema do SCC (não de um motorista de "
+                                        "verdade) — vale conferir com mais atenção "
+                                        "antes de classificar:\n\n"
+                                        + "\n".join(
+                                            f"- **{r['tbr']}**: {r['motivo_reabertura']} "
+                                            f"(leitura: {r['last_scan_by']})"
+                                            for r in suspeitos
+                                        )
+                                    )
+
+                                if not resultado["pendentes"] and not resultado["precisa_validacao_na"]:
                                     st.success(
                                         "Nenhum TBR pendente de revisão manual hoje."
                                     )
@@ -621,6 +659,7 @@ def tela_etapa1():
                                         + resultado["auto_sem_state"]
                                         + resultado["auto_cancelado"]
                                         + resultado["auto_outro_node"]
+                                        + resultado["auto_na"]
                                     )
                                     if automaticos_sem_pendentes:
                                         with st.expander(
@@ -692,104 +731,147 @@ def tela_etapa1():
                                         vai_para("previa_fechamento")
                                         st.rerun()
                                 else:
-                                    # Alerta (só aviso, não muda pra onde o TBR vai)
-                                    # pros pendentes cujo state mudou desde a última
-                                    # vez SEM ter vindo de um motorista de verdade -
-                                    # pode ser só o próprio sistema do SCC
-                                    # reprocessando sozinho (caso investigado pelo
-                                    # Samuel: TBR353806057, preso girando em Route
-                                    # Assignment sem confirmação de ninguém).
-                                    suspeitos = [
-                                        r for r in resultado["pendentes"]
-                                        if r.get("alerta_sistemico")
-                                    ]
-                                    if suspeitos:
-                                        st.warning(
-                                            f"⚠️ {len(suspeitos)} TBR(s) com mudança de "
-                                            "state que parece ter vindo do próprio "
-                                            "sistema do SCC (não de um motorista de "
-                                            "verdade) — vale conferir com mais atenção "
-                                            "antes de classificar:\n\n"
-                                            + "\n".join(
-                                                f"- **{r['tbr']}**: {r['motivo_reabertura']} "
-                                                f"(leitura: {r['last_scan_by']})"
-                                                for r in suspeitos
-                                            )
+                                    # Validação de NA (regra menos restritiva, pedida
+                                    # pelo Samuel): TBR que o usuário colou na
+                                    # caixinha "Tem TBRs de NA" da Etapa 1 e que
+                                    # ainda voltou do SCC sem motorista confirmado -
+                                    # em vez de tentar adivinhar pelo Route Code do
+                                    # CSV (nem sempre vem preenchido), oferece uma
+                                    # lista suspensa com quem já rodou hoje pro
+                                    # próprio usuário escolher. Ao escolher, vira
+                                    # "EM ROTA - DMNZ/PARCEIRO" igual um TBR normal
+                                    # (mesma função classifica_dmnz_ou_parceiro).
+                                    selecoes_na = {}
+                                    if resultado["precisa_validacao_na"]:
+                                        st.markdown(
+                                            f"**Validação de NA — "
+                                            f"{len(resultado['precisa_validacao_na'])} "
+                                            "TBR(s)**"
                                         )
-
-                                    st.caption(
-                                        "Copia a lista de cada grupo, pesquisa todos de "
-                                        "uma vez no SCC, e vai digitando o State "
-                                        "Finalizador de cada um. Agrupado por State do "
-                                        "SCC, igual no desktop."
-                                    )
-                                    grupos = {}
-                                    for r in resultado["pendentes"]:
-                                        grupos.setdefault(r["state_scc"], []).append(r)
-
-                                    # Grade de 3 colunas pros campos de texto - o rótulo
-                                    # fica só o TBR (o motivo vira dica no ícone de
-                                    # ajuda, "?"), e o texto digitado pode ficar
-                                    # truncado dentro da caixa estreita sem problema
-                                    # (o valor continua salvo inteiro por baixo, só a
-                                    # exibição que corta, igual a lista de TBRs
-                                    # consolidados que também não mostra tudo de uma
-                                    # vez na caixa).
-                                    COLUNAS_POR_LINHA = 3
-                                    respostas = {}
-                                    for state, itens in grupos.items():
-                                        st.markdown(f"**{state}** ({len(itens)} TBR(s))")
-                                        # Lista pra copiar e colar de uma vez no SCC -
-                                        # separada por "," (testado no aparelho real:
-                                        # com ";" o SCC dá erro na busca, só vírgula
-                                        # funciona certo - correção de uma suposição
-                                        # anterior que tinha ficado errada). Sem
-                                        # height= fixo - como fica tudo numa linha só
-                                        # (não quebra sozinha), uma altura fixa só
-                                        # sobrava espaço vazio embaixo; sem ela a
-                                        # caixa se ajusta à própria linha, rolando pro
-                                        # lado se for comprida demais (o ícone de
-                                        # copiar pega a lista inteira de qualquer
-                                        # forma).
-                                        st.code(
-                                            ",".join(r["tbr"] for r in itens),
-                                            language=None,
-                                        )
-                                        colunas = st.columns(COLUNAS_POR_LINHA)
-                                        for i, r in enumerate(itens):
-                                            with colunas[i % COLUNAS_POR_LINHA]:
-                                                respostas[r["tbr"]] = st.text_input(
-                                                    r["tbr"],
-                                                    key=f"finalizador_{r['tbr']}",
-                                                    help=r["motivo_reabertura"],
-                                                )
-
-                                    preenchidos = {
-                                        tbr: v.strip()
-                                        for tbr, v in respostas.items()
-                                        if v.strip()
-                                    }
-                                    faltam = len(resultado["pendentes"]) - len(preenchidos)
-                                    if faltam:
                                         st.caption(
-                                            f"Faltam {faltam} TBR(s) sem State "
-                                            "Finalizador preenchido — dá pra salvar só "
-                                            "os que já foram preenchidos, os outros "
-                                            "continuam pendentes pra próxima vez."
+                                            "Colados como NA na Etapa 1, ainda sem "
+                                            "motorista confirmado no SCC. Se já souber "
+                                            "quem pegou, escolhe na lista — quem ficar "
+                                            "sem escolha continua pendente pra próxima "
+                                            "vez."
                                         )
+                                        opcoes_dropdown = opcoes_da_rota_do_dia(linhas_csv)
+                                        rotulos_dropdown = ["— selecionar —"] + [
+                                            f"{nome} — {rota}"
+                                            for nome, rota in opcoes_dropdown
+                                        ]
+                                        for r in resultado["precisa_validacao_na"]:
+                                            escolha = st.selectbox(
+                                                r["tbr"],
+                                                rotulos_dropdown,
+                                                key=f"na_validacao_{r['tbr']}",
+                                                help=f"State SCC: {r['state_scc']}",
+                                            )
+                                            indice = rotulos_dropdown.index(escolha)
+                                            if indice > 0:
+                                                selecoes_na[r["tbr"]] = opcoes_dropdown[
+                                                    indice - 1
+                                                ]
+
+                                    validados_na = []
+                                    for r in resultado["precisa_validacao_na"]:
+                                        if r["tbr"] in selecoes_na:
+                                            nome, rota = selecoes_na[r["tbr"]]
+                                            classificacao = classifica_dmnz_ou_parceiro(
+                                                nome, rota, base_dict,
+                                                resultado["motorista_real_da_rota"],
+                                            )
+                                            validados_na.append({
+                                                **r,
+                                                "resposta": f"EM ROTA - {classificacao}",
+                                            })
+                                    faltam_na = (
+                                        len(resultado["precisa_validacao_na"])
+                                        - len(selecoes_na)
+                                    )
+                                    if faltam_na:
+                                        st.caption(
+                                            f"Faltam {faltam_na} TBR(s) de NA sem "
+                                            "motorista escolhido — continuam pendentes "
+                                            "pra próxima vez."
+                                        )
+
+                                    preenchidos = {}
+                                    if resultado["pendentes"]:
+                                        st.caption(
+                                            "Copia a lista de cada grupo, pesquisa todos de "
+                                            "uma vez no SCC, e vai digitando o State "
+                                            "Finalizador de cada um. Agrupado por State do "
+                                            "SCC, igual no desktop."
+                                        )
+                                        grupos = {}
+                                        for r in resultado["pendentes"]:
+                                            grupos.setdefault(r["state_scc"], []).append(r)
+
+                                        # Grade de 3 colunas pros campos de texto - o rótulo
+                                        # fica só o TBR (o motivo vira dica no ícone de
+                                        # ajuda, "?"), e o texto digitado pode ficar
+                                        # truncado dentro da caixa estreita sem problema
+                                        # (o valor continua salvo inteiro por baixo, só a
+                                        # exibição que corta, igual a lista de TBRs
+                                        # consolidados que também não mostra tudo de uma
+                                        # vez na caixa).
+                                        COLUNAS_POR_LINHA = 3
+                                        respostas = {}
+                                        for state, itens in grupos.items():
+                                            st.markdown(f"**{state}** ({len(itens)} TBR(s))")
+                                            # Lista pra copiar e colar de uma vez no SCC -
+                                            # separada por "," (testado no aparelho real:
+                                            # com ";" o SCC dá erro na busca, só vírgula
+                                            # funciona certo - correção de uma suposição
+                                            # anterior que tinha ficado errada). Sem
+                                            # height= fixo - como fica tudo numa linha só
+                                            # (não quebra sozinha), uma altura fixa só
+                                            # sobrava espaço vazio embaixo; sem ela a
+                                            # caixa se ajusta à própria linha, rolando pro
+                                            # lado se for comprida demais (o ícone de
+                                            # copiar pega a lista inteira de qualquer
+                                            # forma).
+                                            st.code(
+                                                ",".join(r["tbr"] for r in itens),
+                                                language=None,
+                                            )
+                                            colunas = st.columns(COLUNAS_POR_LINHA)
+                                            for i, r in enumerate(itens):
+                                                with colunas[i % COLUNAS_POR_LINHA]:
+                                                    respostas[r["tbr"]] = st.text_input(
+                                                        r["tbr"],
+                                                        key=f"finalizador_{r['tbr']}",
+                                                        help=r["motivo_reabertura"],
+                                                    )
+
+                                        preenchidos = {
+                                            tbr: v.strip()
+                                            for tbr, v in respostas.items()
+                                            if v.strip()
+                                        }
+                                        faltam = len(resultado["pendentes"]) - len(preenchidos)
+                                        if faltam:
+                                            st.caption(
+                                                f"Faltam {faltam} TBR(s) sem State "
+                                                "Finalizador preenchido — dá pra salvar só "
+                                                "os que já foram preenchidos, os outros "
+                                                "continuam pendentes pra próxima vez."
+                                            )
 
                                     # Prévia mostra TUDO que vai ser processado e
                                     # salvo nessa confirmação - os automáticos (em
-                                    # rota / sem state) junto com o que acabou de
-                                    # ser digitado, com uma coluna "Origem" pra
-                                    # diferenciar - não só o que foi digitado
-                                    # agora, senão o usuário não teria o vislumbre
-                                    # completo antes de confirmar.
+                                    # rota / sem state), os TBRs de NA validados
+                                    # agora e o que acabou de ser digitado, com uma
+                                    # coluna "Origem" pra diferenciar - não só o que
+                                    # foi digitado agora, senão o usuário não teria
+                                    # o vislumbre completo antes de confirmar.
                                     automaticos = (
                                         resultado["auto_em_rota"]
                                         + resultado["auto_sem_state"]
                                         + resultado["auto_cancelado"]
                                         + resultado["auto_outro_node"]
+                                        + resultado["auto_na"]
                                     )
                                     linhas_previa = [
                                         {
@@ -798,6 +880,13 @@ def tela_etapa1():
                                             "Origem": "Automático",
                                         }
                                         for r in automaticos
+                                    ] + [
+                                        {
+                                            "TBR": r["tbr"],
+                                            "State Finalizador": r["resposta"],
+                                            "Origem": "Validado (NA)",
+                                        }
+                                        for r in validados_na
                                     ] + [
                                         {
                                             "TBR": tbr,
@@ -823,7 +912,7 @@ def tela_etapa1():
                                             key="salvar_historico",
                                             use_container_width=True,
                                         ):
-                                            for r in automaticos:
+                                            for r in automaticos + validados_na:
                                                 atualiza_base(
                                                     base_tbr, r["tbr"], r["resposta"],
                                                     r["state_scc"], data_hoje_str,
@@ -1171,3 +1260,4 @@ elif st.session_state.tela == "fechamento_final":
     tela_fechamento_final()
 elif st.session_state.tela == "parceiros":
     tela_parceiros()
+
