@@ -313,7 +313,21 @@ def tela_etapa1():
         st.write("")
         st.markdown("**Etapa 2 — CSV do SCC**")
         st.caption("Cole a lista no SCC, exporte e suba o CSV aqui.")
-        arquivo_csv = st.file_uploader("CSV exportado do SCC", type=["csv"], key="csv_scc")
+        # SEM restrição de tipo (type=None) de propósito - com type=["csv"] o
+        # seletor de arquivo do Android/Chrome às vezes deixa o próprio CSV
+        # exportado do SCC APAGADO/bloqueado na lista, porque o navegador
+        # salva o download com um "tipo" (MIME) genérico em vez de
+        # reconhecer como CSV de verdade, e o seletor filtra por esse tipo
+        # (não só pela extensão) - visto em vídeo de teste real no celular
+        # (09/09/2026). Sem essa restrição o seletor mostra todos os
+        # arquivos; quem valida se é um CSV de verdade é o le_csv_scc logo
+        # abaixo (já mostra um st.error claro se não conseguir ler).
+        arquivo_csv = st.file_uploader("CSV exportado do SCC", type=None, key="csv_scc")
+        if arquivo_csv is not None and not arquivo_csv.name.lower().endswith(".csv"):
+            st.warning(
+                f"O arquivo **{arquivo_csv.name}** não parece ser um `.csv`. "
+                "Confira se é o arquivo certo antes de continuar."
+            )
 
         # Primeiro pedaço de verdade da Etapa 2: só a parte de manter a
         # base de DAs (quem é DMNZ) em dia. O resto (State Finalizador
