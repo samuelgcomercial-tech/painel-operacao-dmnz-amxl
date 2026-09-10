@@ -22,6 +22,7 @@ import unicodedata
 from collections import Counter, OrderedDict
 
 from state_finalizador import monta_coluna_das_dmnz
+import parceiros as parceiros_mod
 
 
 def normaliza_texto_painel(txt):
@@ -94,44 +95,75 @@ def eh_insucesso(finalizador):
     return False
 
 
-def classifica_insucesso(finalizador):
-    """'dmnz', 'parceiro' (qualquer nome especifico, ex: mriz/deluna) ou
-    'sem_detalhe' (usuario digitou so 'Insucesso' sem dizer de quem).
-    Mesma funcao do desktop."""
-    txt = finalizador.strip().lower()
-    if "dmnz" in txt:
-        return "dmnz"
-    if txt == "insucesso":
-        return "sem_detalhe"
-    return "parceiro"
+def classifica_insucesso(finalizador, parceiros):
+    """Devolve o NOME de quem é o insucesso: o nome cadastrado como
+    'própria empresa' (ex: 'DMNZ', ou o que o node cadastrar), o nome de
+    um parceiro terceirizado cadastrado (ex: 'MRIZ'), ou 'sem_detalhe'
+    quando o texto não cita nenhum nome cadastrado (usuário digitou só
+    'Insucesso', ou citou algo que ainda não está na lista - possível
+    erro de digitação ou parceiro novo ainda não cadastrado).
+
+    'parceiros': lista de dicts {nome, propria_empresa} vinda de
+    parceiros.py/parceiros.csv (por node). Antes disso a regra era fixa
+    (só sabia dizer 'dmnz' vs 'parceiro' genérico, sem saber QUAL
+    parceiro, e travada na palavra literal 'dmnz') - agora usa o cadastro
+    de verdade, que o Samuel decidiu manter por node (cada node pode
+    chamar a própria empresa de um jeito diferente, ex: 'Domina').
+
+    Se 'parceiros' vier vazio (node ainda sem cadastro), cai pro
+    comportamento antigo - só pra não quebrar quem ainda não cadastrou
+    nada; assim que existir cadastro pra esse node, essa branch nunca
+    mais roda."""
+    if not parceiros:
+        txt = finalizador.strip().lower()
+        if "dmnz" in txt:
+            return "DMNZ"
+        if txt == "insucesso":
+            return "sem_detalhe"
+        return "parceiro"
+
+    nome_propria = parceiros_mod.nome_propria_empresa(parceiros)
+    parceiros_propria = [p for p in parceiros if p["propria_empresa"]]
+    parceiros_terceiros = [p for p in parceiros if not p["propria_empresa"]]
+
+    if parceiros_propria and parceiros_mod.identifica_parceiro_no_texto(finalizador, parceiros_propria):
+        return nome_propria
+
+    achado = parceiros_mod.identifica_parceiro_no_texto(finalizador, parceiros_terceiros)
+    if achado:
+        return achado
+
+    return "sem_detalhe"
 
 
 PALAVRAS_AVARIA = ["avaria", "quebrado", "vazando", "rasgado"]
 
 
-def frase_insucesso(dados, node):
-    """Mesma função do desktop: detalha se o insucesso é referente a DMNZ,
-    parceiro (qualquer nome específico) ou ficou sem detalhamento de a
-    quem pertence."""
+def frase_insucesso(dados, node, parceiros):
+    """Detalha o insucesso citando o nome de cada empresa envolvida de
+    verdade (ex: 'referentes a DMNZ e referentes a MRIZ'), em vez do
+    genérico 'parceiro(s)' de antes - agora que dá pra saber QUAL
+    parceiro, graças ao cadastro."""
     insucessos = [r for r in dados if eh_insucesso(r["finalizador"])]
     if not insucessos:
         return f"Em {node} não houve registros de insucessos"
 
-    tem_dmnz = any(classifica_insucesso(r["finalizador"]) == "dmnz" for r in insucessos)
-    tem_parceiro = any(classifica_insucesso(r["finalizador"]) == "parceiro" for r in insucessos)
-    tem_sem_detalhe = any(classifica_insucesso(r["finalizador"]) == "sem_detalhe" for r in insucessos)
+    classificados = [classifica_insucesso(r["finalizador"], parceiros) for r in insucessos]
+    nomes_especificos = sorted({c for c in classificados if c != "sem_detalhe"})
+    tem_sem_detalhe = "sem_detalhe" in classificados
 
-    partes = []
-    if tem_dmnz:
-        partes.append("referentes a DMNZ")
-    if tem_parceiro:
-        partes.append("referentes a parceiro(s)")
+    partes = [f"referentes a {nome}" for nome in nomes_especificos]
     if tem_sem_detalhe:
         partes.append("sem detalhamento de a quem pertence")
 
     frase = f"Em {node} houve registro de insucesso(s), " + " e ".join(partes)
-    if tem_parceiro and not tem_dmnz and not tem_sem_detalhe:
-        frase += " (a DMNZ obteve 100% nas entregas)"
+
+    nome_propria = parceiros_mod.nome_propria_empresa(parceiros) or "DMNZ"
+    so_terceiros = (
+        nomes_especificos and nome_propria not in nomes_especificos and not tem_sem_detalhe
+    )
+    if so_terceiros:
+        frase += f" (a {nome_propria} obteve 100% nas entregas)"
     return frase
 
 
@@ -154,11 +186,11 @@ def frase_mnr_outro_node(dados, n_outro_node):
     return ", ".join(partes)
 
 
-def monta_observacoes(dados, node):
+def monta_observacoes(dados, node, parceiros):
     """Texto automático da caixa 'OBSERVAÇÕES' - mesma lógica do desktop
     (monta_observacoes), sem a parte de reincidência (cenário 2) e sem
     Reversa (painel 6 ainda não integrado na web)."""
-    frases = [frase_insucesso(dados, node)]
+    frases = [frase_insucesso(dados, node, parceiros)]
 
     avariados = [r for r in dados if any(p in r["finalizador"].lower() for p in PALAVRAS_AVARIA)]
     if avariados:
@@ -177,7 +209,7 @@ def monta_observacoes(dados, node):
     return texto[0].upper() + texto[1:]
 
 
-def calcula_tudo(dados, node="LRN9"):
+def calcula_tudo(dados, node="LRN9", parceiros=None):
     """Centraliza os calculos de todos os paineis (exceto o 6 - Reversa) a
     partir da lista de linhas ja finalizadas.
 
@@ -186,8 +218,14 @@ def calcula_tudo(dados, node="LRN9"):
     SCC + historico de TBR + base de DAs, em vez de ler de um Excel
     intermediario.
 
+    parceiros: lista de dicts {nome, propria_empresa} do cadastro desse
+    node (parceiros.py) - se vier vazio/None, a Análise Insucesso cai pro
+    comportamento antigo (só DMNZ vs "parceiro" genérico, ver
+    classifica_insucesso).
+
     Devolve um dict com os numeros de cada painel, pronto tanto pra previa
     quanto pro dashboard final."""
+    parceiros = parceiros or []
     contagem_scc, nested = monta_painel_state_scc(dados)
 
     n_dmnz = sum(1 for r in dados if r["dmnz"])
@@ -197,9 +235,13 @@ def calcula_tudo(dados, node="LRN9"):
     outro_node = [r["tbr"] for r in dados if "outro node" in r["finalizador"].lower()]
 
     insucessos = [r for r in dados if eh_insucesso(r["finalizador"])]
-    n_insucesso_dmnz = sum(1 for r in insucessos if classifica_insucesso(r["finalizador"]) == "dmnz")
-    n_insucesso_parceiro = sum(1 for r in insucessos if classifica_insucesso(r["finalizador"]) == "parceiro")
-    n_insucesso_sem_detalhe = sum(1 for r in insucessos if classifica_insucesso(r["finalizador"]) == "sem_detalhe")
+    # Antes eram 3 contadores fixos (DMNZ / parceiro genérico / sem
+    # detalhe) - agora é uma contagem por NOME (ex: {"DMNZ": 2, "MRIZ": 2}),
+    # já que classifica_insucesso sabe dizer qual parceiro é, não só que
+    # "é um parceiro".
+    contagem_insucesso = Counter(
+        classifica_insucesso(r["finalizador"], parceiros) for r in insucessos
+    )
 
     # auditoria: TBR nao-Delivered que chegou aqui sem State Finalizador
     # preenchido - o State Finalizador deveria ter classificado (automatico
@@ -215,13 +257,10 @@ def calcula_tudo(dados, node="LRN9"):
         "contagem_scc": contagem_scc,
         "nested": nested,
         "n_dmnz": n_dmnz,
-        "n_insucesso_dmnz": n_insucesso_dmnz,
-        "n_insucesso_parceiro": n_insucesso_parceiro,
-        "n_insucesso_sem_detalhe": n_insucesso_sem_detalhe,
+        "contagem_insucesso": contagem_insucesso,
         "n_insucesso_total": len(insucessos),
         "total_mnr": total_mnr,
         "outro_node": outro_node,
         "sem_finalizador": sem_finalizador,
-        "observacoes": monta_observacoes(dados, node),
+        "observacoes": monta_observacoes(dados, node, parceiros),
     }
-
