@@ -884,10 +884,16 @@ def tela_previa_fechamento():
         if st.button("← Voltar"):
             vai_para("home")
             st.rerun()
+    # Data do ARQUIVO de rotas (Etapa 1), não a data de hoje - o
+    # fechamento pode ser rodado num dia diferente do dia do arquivo (ex:
+    # rodou de madrugada, ou terminou de digitar o State Finalizador só
+    # no dia seguinte). Cai pra hoje só se a data não tiver sido
+    # detectada no arquivo.
+    data_do_fechamento = st.session_state.data_arquivo_rotas or dt.date.today()
     with col_titulo:
         st.markdown(
             f"**Prévia do Fechamento**  ·  {st.session_state.nome_usuario} · "
-            f"{NODE_ATUAL} · {dt.date.today().strftime('%d/%m/%Y')}"
+            f"{NODE_ATUAL} · {data_do_fechamento.strftime('%d/%m/%Y')}"
         )
     st.caption(
         "State Finalizador já salvo no histórico. Confira os números antes de gerar "
@@ -1003,7 +1009,12 @@ def tela_fechamento_final():
         st.warning("Não achei dados pra montar o fechamento. Volta e roda de novo.")
         return
 
-    html = gera_html_fechamento(r, NODE_ATUAL, st.session_state.nome_usuario)
+    # Mesma correção da prévia: data do ARQUIVO de rotas, não a data de
+    # hoje (o robô pode rodar num dia diferente do dia do arquivo).
+    data_do_fechamento = st.session_state.data_arquivo_rotas or dt.date.today()
+    html = gera_html_fechamento(
+        r, NODE_ATUAL, st.session_state.nome_usuario, data_fechamento=data_do_fechamento
+    )
     st.markdown(html, unsafe_allow_html=True)
 
     st.caption(
@@ -1127,4 +1138,3 @@ elif st.session_state.tela == "fechamento_final":
     tela_fechamento_final()
 elif st.session_state.tela == "parceiros":
     tela_parceiros()
-
