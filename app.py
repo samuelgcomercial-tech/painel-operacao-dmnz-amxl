@@ -34,6 +34,7 @@ from historico_tbr import atualiza_base, gera_csv_historico, parseia_texto_histo
 from state_finalizador import processa as processa_state_finalizador
 from state_finalizador import resumo_das_por_rota, lista_sem_da_de_verdade
 from calculo_fechamento import calcula_tudo, monta_dados_do_dia
+from dashboard_fechamento import gera_html_fechamento
 
 NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
 
@@ -647,7 +648,7 @@ def tela_etapa1():
                                                 linhas_csv, base_tbr, base_dict,
                                                 resultado["motorista_real_da_rota"],
                                             )
-                                            st.session_state.dados_fechamento = calcula_tudo(dados_dia)
+                                            st.session_state.dados_fechamento = calcula_tudo(dados_dia, NODE_ATUAL)
                                             vai_para("previa_fechamento")
                                             st.rerun()
                                     elif st.button(
@@ -662,7 +663,7 @@ def tela_etapa1():
                                             linhas_csv, base_tbr, base_dict,
                                             resultado["motorista_real_da_rota"],
                                         )
-                                        st.session_state.dados_fechamento = calcula_tudo(dados_dia)
+                                        st.session_state.dados_fechamento = calcula_tudo(dados_dia, NODE_ATUAL)
                                         vai_para("previa_fechamento")
                                         st.rerun()
                                 else:
@@ -807,7 +808,7 @@ def tela_etapa1():
                                                     linhas_csv, base_tbr, base_dict,
                                                     resultado["motorista_real_da_rota"],
                                                 )
-                                                st.session_state.dados_fechamento = calcula_tudo(dados_dia)
+                                                st.session_state.dados_fechamento = calcula_tudo(dados_dia, NODE_ATUAL)
                                                 vai_para("previa_fechamento")
                                                 st.rerun()
 
@@ -946,12 +947,39 @@ def tela_previa_fechamento():
     st.info("Painel 6 (State Reversa) ainda não integrado — falta a base de Reversa entrar no fluxo web.")
 
     st.divider()
-    st.button(
+    if st.button(
         "📄 Gerar Fechamento",
         use_container_width=True,
         type="primary",
-        disabled=True,
-        help="Ainda não construído — é a próxima etapa (Etapa 3), monta o dashboard final em cima desses mesmos números.",
+        help="Monta o dashboard final em cima desses mesmos números.",
+    ):
+        vai_para("fechamento_final")
+        st.rerun()
+
+
+# ------------------------------------------------------------------
+# ETAPA 3 — GERAR FECHAMENTO (dashboard final)
+# ------------------------------------------------------------------
+def tela_fechamento_final():
+    col_voltar, col_titulo = st.columns([1, 3], vertical_alignment="center")
+    with col_voltar:
+        if st.button("← Voltar à prévia"):
+            vai_para("previa_fechamento")
+            st.rerun()
+    with col_titulo:
+        st.markdown("**Etapa 3 — Fechamento**")
+
+    r = st.session_state.dados_fechamento
+    if r is None:
+        st.warning("Não achei dados pra montar o fechamento. Volta e roda de novo.")
+        return
+
+    html = gera_html_fechamento(r, NODE_ATUAL, st.session_state.nome_usuario)
+    st.markdown(html, unsafe_allow_html=True)
+
+    st.caption(
+        "Visual ainda sem a marca d'água/logo do node e sem o painel de Reversa — "
+        "faltam os arquivos de imagem e a integração da base de Reversa."
     )
 
 
@@ -964,3 +992,6 @@ elif st.session_state.tela == "etapa1":
     tela_etapa1()
 elif st.session_state.tela == "previa_fechamento":
     tela_previa_fechamento()
+elif st.session_state.tela == "fechamento_final":
+    tela_fechamento_final()
+
