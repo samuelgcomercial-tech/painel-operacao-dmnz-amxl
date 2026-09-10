@@ -108,14 +108,22 @@ def gera_html_fechamento(r, node, nome_usuario, data_fechamento=None):
     blocos.append(_linha("Total Geral", r["total_geral"], total=True))
     col2 = [_painel("3. STATE SCC & ANÁLISE DMNZ", "".join(blocos))]
 
-    linhas4 = ""
-    if r["n_insucesso_dmnz"]:
-        linhas4 += _linha("Insucesso DMNZ", r["n_insucesso_dmnz"])
-    if r["n_insucesso_parceiro"]:
-        linhas4 += _linha("Insucesso Parceiro", r["n_insucesso_parceiro"])
-    if r["n_insucesso_sem_detalhe"]:
-        linhas4 += _linha("Insucesso (sem detalhe)", r["n_insucesso_sem_detalhe"])
-    if not linhas4:
+    # "sem_detalhe" (texto que não citou nenhum parceiro cadastrado) por
+    # último de propósito - é o caso que precisa de atenção/correção,
+    # não compete por ordem com os nomes de verdade (DMNZ, MRIZ, ...).
+    itens_insucesso = sorted(
+        r["contagem_insucesso"].items(),
+        key=lambda kv: (kv[0] == "sem_detalhe", -kv[1]),
+    )
+    if itens_insucesso:
+        linhas4 = "".join(
+            _linha(
+                "Insucesso (sem detalhe)" if nome == "sem_detalhe" else f"Insucesso {nome}",
+                qtd,
+            )
+            for nome, qtd in itens_insucesso
+        )
+    else:
         linhas4 = _linha("Sem registros", "-")
 
     linhas5 = _linha("MNR", r["total_mnr"]) if r["total_mnr"] else _linha("Sem registros", "-")
@@ -170,3 +178,4 @@ def gera_html_fechamento(r, node, nome_usuario, data_fechamento=None):
     # nenhuma - HTML e CSS não ligam pra isso (só <pre>/<code> ligam, que
     # a gente não usa aqui), então elimina de vez o risco.
     return " ".join(linha.strip() for linha in html.splitlines() if linha.strip())
+
