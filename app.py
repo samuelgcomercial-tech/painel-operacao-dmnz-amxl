@@ -594,6 +594,10 @@ def tela_etapa1():
                                     "(automático, DA de verdade vinculado) · "
                                     f"**{len(resultado['auto_sem_state'])} sem State** "
                                     "(automático) · "
+                                    f"**{len(resultado['auto_cancelado'])} cancelado(s)** "
+                                    "(automático, antes da rota) · "
+                                    f"**{len(resultado['auto_outro_node'])} outro node** "
+                                    "(automático) · "
                                     f"**{len(resultado['conhecidos'])} reaproveitado(s)** "
                                     "do histórico · "
                                     f"**{len(resultado['pendentes'])} pendente(s)** "
@@ -615,6 +619,8 @@ def tela_etapa1():
                                     automaticos_sem_pendentes = (
                                         resultado["auto_em_rota"]
                                         + resultado["auto_sem_state"]
+                                        + resultado["auto_cancelado"]
+                                        + resultado["auto_outro_node"]
                                     )
                                     if automaticos_sem_pendentes:
                                         with st.expander(
@@ -686,6 +692,31 @@ def tela_etapa1():
                                         vai_para("previa_fechamento")
                                         st.rerun()
                                 else:
+                                    # Alerta (só aviso, não muda pra onde o TBR vai)
+                                    # pros pendentes cujo state mudou desde a última
+                                    # vez SEM ter vindo de um motorista de verdade -
+                                    # pode ser só o próprio sistema do SCC
+                                    # reprocessando sozinho (caso investigado pelo
+                                    # Samuel: TBR353806057, preso girando em Route
+                                    # Assignment sem confirmação de ninguém).
+                                    suspeitos = [
+                                        r for r in resultado["pendentes"]
+                                        if r.get("alerta_sistemico")
+                                    ]
+                                    if suspeitos:
+                                        st.warning(
+                                            f"⚠️ {len(suspeitos)} TBR(s) com mudança de "
+                                            "state que parece ter vindo do próprio "
+                                            "sistema do SCC (não de um motorista de "
+                                            "verdade) — vale conferir com mais atenção "
+                                            "antes de classificar:\n\n"
+                                            + "\n".join(
+                                                f"- **{r['tbr']}**: {r['motivo_reabertura']} "
+                                                f"(leitura: {r['last_scan_by']})"
+                                                for r in suspeitos
+                                            )
+                                        )
+
                                     st.caption(
                                         "Copia a lista de cada grupo, pesquisa todos de "
                                         "uma vez no SCC, e vai digitando o State "
@@ -757,6 +788,8 @@ def tela_etapa1():
                                     automaticos = (
                                         resultado["auto_em_rota"]
                                         + resultado["auto_sem_state"]
+                                        + resultado["auto_cancelado"]
+                                        + resultado["auto_outro_node"]
                                     )
                                     linhas_previa = [
                                         {
