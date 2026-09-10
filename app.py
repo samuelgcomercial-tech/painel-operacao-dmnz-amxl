@@ -830,6 +830,9 @@ CSS_PAINEL_FECHAMENTO = """
 .painel-lrn9 .linha.sub { padding-left: 14px; color:#555; }
 .painel-lrn9 .linha.total { font-weight:700; border-top: 1px solid #999;
                border-bottom: none; margin-top:4px; padding-top:6px; }
+.painel-lrn9 .linha.categoria { font-weight:600; border-bottom:none;
+               padding-top: 8px; }
+.painel-lrn9 .linha.categoria:first-child { padding-top: 0; }
 </style>
 """
 
@@ -837,6 +840,15 @@ CSS_PAINEL_FECHAMENTO = """
 def _linha_painel(label, valor, sub=False, total=False):
     classe = "linha" + (" sub" if sub else "") + (" total" if total else "")
     return f'<div class="{classe}"><span>{label}</span><span>{valor}</span></div>'
+
+
+def _linha_categoria(label):
+    # Só o rótulo, sem número do lado - o número do template original só
+    # aparece na linha do State Finalizador (dentro da categoria), não na
+    # categoria em si. Repetir o total na categoria E na única linha de
+    # baixo (ex: "Delivered 490" seguido de "Entregue 490") ficava
+    # parecendo duplicado quando só tem um State Finalizador ali dentro.
+    return f'<div class="linha categoria"><span>{label}</span></div>'
 
 
 def _painel(titulo, linhas_html):
@@ -889,7 +901,7 @@ def tela_previa_fechamento():
     with col2:
         blocos = []
         for cat, subitens in r["nested"].items():
-            blocos.append(_linha_painel(cat, sum(subitens.values())))
+            blocos.append(_linha_categoria(cat))
             for fin, qtd in subitens.items():
                 blocos.append(_linha_painel(fin or "(sem State Finalizador)", qtd, sub=True))
         blocos.append(_linha_painel("Total Geral", r["total_geral"], total=True))
@@ -952,4 +964,3 @@ elif st.session_state.tela == "etapa1":
     tela_etapa1()
 elif st.session_state.tela == "previa_fechamento":
     tela_previa_fechamento()
-
