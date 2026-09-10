@@ -138,7 +138,7 @@ def gera_html_fechamento(r, node, nome_usuario, data_fechamento=None):
             + (" ..." if len(r["sem_finalizador"]) > 10 else "") + "</div>"
         )
 
-    return f"""
+    html = f"""
     {CSS_DASHBOARD}
     <div class="fech-wrap">
       <div class="fech-header">
@@ -157,3 +157,16 @@ def gera_html_fechamento(r, node, nome_usuario, data_fechamento=None):
       </div>
     </div>
     """
+
+    # st.markdown() roda o texto por um parser de Markdown antes de exibir
+    # - e Markdown tem duas regras que atrapalham HTML grande feito esse:
+    # (1) linha começando com 4+ espaços vira BLOCO DE CÓDIGO (mostra a
+    # tag como texto cru em vez de renderizar - foi exatamente o que
+    # aconteceu no teste real, a tela mostrou as tags <div> na tela); (2)
+    # linha em branco separa um bloco de HTML do próximo, podendo cortar
+    # a estrutura no meio. Em vez de tentar acertar a identação/linhas em
+    # branco na mão (frágil - qualquer ajuste futuro pode reintroduzir o
+    # mesmo bug), a saída inteira vira UMA linha só, sem quebra de linha
+    # nenhuma - HTML e CSS não ligam pra isso (só <pre>/<code> ligam, que
+    # a gente não usa aqui), então elimina de vez o risco.
+    return " ".join(linha.strip() for linha in html.splitlines() if linha.strip())
