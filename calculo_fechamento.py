@@ -106,7 +106,78 @@ def classifica_insucesso(finalizador):
     return "parceiro"
 
 
-def calcula_tudo(dados):
+PALAVRAS_AVARIA = ["avaria", "quebrado", "vazando", "rasgado"]
+
+
+def frase_insucesso(dados, node):
+    """Mesma função do desktop: detalha se o insucesso é referente a DMNZ,
+    parceiro (qualquer nome específico) ou ficou sem detalhamento de a
+    quem pertence."""
+    insucessos = [r for r in dados if eh_insucesso(r["finalizador"])]
+    if not insucessos:
+        return f"Em {node} não houve registros de insucessos"
+
+    tem_dmnz = any(classifica_insucesso(r["finalizador"]) == "dmnz" for r in insucessos)
+    tem_parceiro = any(classifica_insucesso(r["finalizador"]) == "parceiro" for r in insucessos)
+    tem_sem_detalhe = any(classifica_insucesso(r["finalizador"]) == "sem_detalhe" for r in insucessos)
+
+    partes = []
+    if tem_dmnz:
+        partes.append("referentes a DMNZ")
+    if tem_parceiro:
+        partes.append("referentes a parceiro(s)")
+    if tem_sem_detalhe:
+        partes.append("sem detalhamento de a quem pertence")
+
+    frase = f"Em {node} houve registro de insucesso(s), " + " e ".join(partes)
+    if tem_parceiro and not tem_dmnz and not tem_sem_detalhe:
+        frase += " (a DMNZ obteve 100% nas entregas)"
+    return frase
+
+
+def frase_mnr_outro_node(dados, n_outro_node):
+    """Versão sem reincidência (isso ainda não existe na web - depende do
+    histórico de dias anteriores, que é uma etapa futura). Mesma lógica do
+    desktop no cenário simples (cenario='1')."""
+    tem_mnr = any(r["finalizador"].upper().startswith("MNR") for r in dados)
+    if not tem_mnr and n_outro_node == 0:
+        return None
+    if tem_mnr and n_outro_node > 0:
+        base = "houve registros de MNRs e PCT de outro node"
+    elif tem_mnr:
+        base = "houve registro de MNRs"
+    else:
+        base = "houve registro de PCT de outro node"
+    partes = [base]
+    if n_outro_node > 0:
+        partes.append("entre os pacotes de outro node, todos já sinalizados ao cliente e aguardando tratativas")
+    return ", ".join(partes)
+
+
+def monta_observacoes(dados, node):
+    """Texto automático da caixa 'OBSERVAÇÕES' - mesma lógica do desktop
+    (monta_observacoes), sem a parte de reincidência (cenário 2) e sem
+    Reversa (painel 6 ainda não integrado na web)."""
+    frases = [frase_insucesso(dados, node)]
+
+    avariados = [r for r in dados if any(p in r["finalizador"].lower() for p in PALAVRAS_AVARIA)]
+    if avariados:
+        frases.append("houve registro de pct(s) avariado(s)")
+
+    perdidos = [r for r in dados if "perdido" in r["finalizador"].lower()]
+    if perdidos:
+        frases.append("houve registro de pct(s) perdido(s)")
+
+    n_outro_node = len([r for r in dados if "outro node" in r["finalizador"].lower()])
+    frase_mnr = frase_mnr_outro_node(dados, n_outro_node)
+    if frase_mnr:
+        frases.append(frase_mnr)
+
+    texto = ", ".join(frases) + "."
+    return texto[0].upper() + texto[1:]
+
+
+def calcula_tudo(dados, node="LRN9"):
     """Centraliza os calculos de todos os paineis (exceto o 6 - Reversa) a
     partir da lista de linhas ja finalizadas.
 
@@ -151,4 +222,6 @@ def calcula_tudo(dados):
         "total_mnr": total_mnr,
         "outro_node": outro_node,
         "sem_finalizador": sem_finalizador,
+        "observacoes": monta_observacoes(dados, node),
     }
+
