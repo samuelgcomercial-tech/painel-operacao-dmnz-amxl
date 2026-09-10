@@ -33,6 +33,7 @@ from github_store import ConflitoDeSalvamento, le_arquivo, salva_arquivo, secret
 from historico_tbr import atualiza_base, gera_csv_historico, parseia_texto_historico
 from state_finalizador import processa as processa_state_finalizador
 from state_finalizador import resumo_das_por_rota, lista_sem_da_de_verdade
+from calculo_fechamento import calcula_tudo, monta_dados_do_dia
 
 NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
 
@@ -75,6 +76,8 @@ if "node_detectado_rotas" not in st.session_state:
     st.session_state.node_detectado_rotas = None
 if "tem_na" not in st.session_state:
     st.session_state.tem_na = False
+if "dados_fechamento" not in st.session_state:
+    st.session_state.dados_fechamento = None
 
 
 def vai_para(tela):
@@ -626,8 +629,28 @@ def tela_etapa1():
                                         except Exception as e:
                                             st.error(f"Não consegui salvar no GitHub: {e}")
                                         else:
-                                            st.success("Histórico atualizado!")
+                                            dados_dia = monta_dados_do_dia(
+                                                linhas_csv, base_tbr, base_dict,
+                                                resultado["motorista_real_da_rota"],
+                                            )
+                                            st.session_state.dados_fechamento = calcula_tudo(dados_dia)
+                                            vai_para("previa_fechamento")
                                             st.rerun()
+                                    elif st.button(
+                                        "➡️ Ver prévia do fechamento",
+                                        key="ver_previa_ja_salvo",
+                                        use_container_width=True,
+                                    ):
+                                        # Já estava tudo salvo de uma visita anterior
+                                        # (nada novo pra gravar) - só monta a prévia
+                                        # de novo em cima do que já está no histórico.
+                                        dados_dia = monta_dados_do_dia(
+                                            linhas_csv, base_tbr, base_dict,
+                                            resultado["motorista_real_da_rota"],
+                                        )
+                                        st.session_state.dados_fechamento = calcula_tudo(dados_dia)
+                                        vai_para("previa_fechamento")
+                                        st.rerun()
                                 else:
                                     st.caption(
                                         "Copia a lista de cada grupo, pesquisa todos de "
@@ -766,12 +789,144 @@ def tela_etapa1():
                                                     f"Não consegui salvar no GitHub: {e}"
                                                 )
                                             else:
-                                                st.success(
-                                                    f"Histórico atualizado! "
-                                                    f"{len(linhas_previa)} TBR(s) "
-                                                    "salvo(s)."
+                                                dados_dia = monta_dados_do_dia(
+                                                    linhas_csv, base_tbr, base_dict,
+                                                    resultado["motorista_real_da_rota"],
                                                 )
+                                                st.session_state.dados_fechamento = calcula_tudo(dados_dia)
+                                                vai_para("previa_fechamento")
                                                 st.rerun()
+
+
+# ------------------------------------------------------------------
+# PRÉVIA GERAL DO FECHAMENTO — aparece depois que o State Finalizador
+# já foi salvo no histórico. Mostra tudo que foi lido e processado (menos
+# o painel de Reversa, que ainda não entrou no fluxo web) antes de liberar
+# a Etapa 3 (Gerar Fechamento - o dashboard final, ainda não construído).
+# ------------------------------------------------------------------
+CSS_PAINEL_FECHAMENTO = """
+<style>
+.painel-lrn9 { border: 1px solid #e2e2e2; border-radius: 8px; overflow: hidden;
+               margin-bottom: 14px; }
+.painel-lrn9 .cabecalho { background: #E8590C; color: white; padding: 8px 14px;
+               font-weight: 600; font-size: 0.95em; }
+.painel-lrn9 .corpo { padding: 10px 14px 12px; background: white; color: #1a1a1a; }
+.painel-lrn9 .linha { display:flex; justify-content:space-between; gap: 8px;
+               padding: 3px 0; border-bottom: 1px dotted #ddd; font-size: 0.92em; }
+.painel-lrn9 .linha.sub { padding-left: 14px; color:#555; }
+.painel-lrn9 .linha.total { font-weight:700; border-top: 1px solid #999;
+               border-bottom: none; margin-top:4px; padding-top:6px; }
+</style>
+"""
+
+
+def _linha_painel(label, valor, sub=False, total=False):
+    classe = "linha" + (" sub" if sub else "") + (" total" if total else "")
+    return f'<div class="{classe}"><span>{label}</span><span>{valor}</span></div>'
+
+
+def _painel(titulo, linhas_html):
+    return (
+        f'<div class="painel-lrn9"><div class="cabecalho">{titulo}</div>'
+        f'<div class="corpo">{linhas_html}</div></div>'
+    )
+
+
+def tela_previa_fechamento():
+    col_voltar, col_titulo = st.columns([1, 3], vertical_alignment="center")
+    with col_voltar:
+        if st.button("← Voltar"):
+            vai_para("home")
+            st.rerun()
+    with col_titulo:
+        st.markdown(
+            f"**Prévia do Fechamento**  ·  {st.session_state.nome_usuario} · "
+            f"{NODE_ATUAL} · {dt.date.today().strftime('%d/%m/%Y')}"
+        )
+    st.caption(
+        "State Finalizador já salvo no histórico. Confira os números antes de gerar "
+        "o fechamento."
+    )
+
+    r = st.session_state.dados_fechamento
+    if r is None:
+        st.warning(
+            "Não achei dados pra montar a prévia (a sessão pode ter expirado). "
+            "Volta pro início e roda o State Finalizador de novo."
+        )
+        return
+
+    st.markdown(CSS_PAINEL_FECHAMENTO, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        linhas = "".join(
+            _linha_painel(cat, qtd) for cat, qtd in r["contagem_scc"].most_common()
+        )
+        linhas += _linha_painel("Total Geral", r["total_geral"], total=True)
+        st.markdown(_painel("1. STATE SCC", linhas), unsafe_allow_html=True)
+
+        st.markdown(
+            _painel("2. STATE ENTREGAS DMNZ", _linha_painel("DMNZ", r["n_dmnz"])),
+            unsafe_allow_html=True,
+        )
+
+    with col2:
+        blocos = []
+        for cat, subitens in r["nested"].items():
+            blocos.append(_linha_painel(cat, sum(subitens.values())))
+            for fin, qtd in subitens.items():
+                blocos.append(_linha_painel(fin or "(sem State Finalizador)", qtd, sub=True))
+        blocos.append(_linha_painel("Total Geral", r["total_geral"], total=True))
+        st.markdown(
+            _painel("3. STATE SCC & ANÁLISE DMNZ", "".join(blocos)),
+            unsafe_allow_html=True,
+        )
+
+    with col3:
+        linhas4 = ""
+        if r["n_insucesso_dmnz"]:
+            linhas4 += _linha_painel("Insucesso DMNZ", r["n_insucesso_dmnz"])
+        if r["n_insucesso_parceiro"]:
+            linhas4 += _linha_painel("Insucesso Parceiro", r["n_insucesso_parceiro"])
+        if r["n_insucesso_sem_detalhe"]:
+            linhas4 += _linha_painel("Insucesso (sem detalhe)", r["n_insucesso_sem_detalhe"])
+        if not linhas4:
+            linhas4 = _linha_painel("Sem registros", "-")
+        st.markdown(_painel("4. ANÁLISE INSUCESSO", linhas4), unsafe_allow_html=True)
+
+        linhas5 = (
+            _linha_painel("MNR", r["total_mnr"]) if r["total_mnr"]
+            else _linha_painel("Sem registros", "-")
+        )
+        st.markdown(_painel("5. MNR's", linhas5), unsafe_allow_html=True)
+
+        linhas_outro = (
+            _linha_painel("Outro NODE", len(r["outro_node"])) if r["outro_node"]
+            else _linha_painel("Sem registros", "-")
+        )
+        st.markdown(
+            _painel("TBR's em outras estações", linhas_outro), unsafe_allow_html=True
+        )
+
+    if r["sem_finalizador"]:
+        st.warning(
+            f"⚠ {len(r['sem_finalizador'])} TBR(s) não-Delivered chegaram sem State "
+            f"Finalizador preenchido: {', '.join(r['sem_finalizador'][:10])}"
+            + (" ..." if len(r["sem_finalizador"]) > 10 else "")
+        )
+
+    st.info("Painel 6 (State Reversa) ainda não integrado — falta a base de Reversa entrar no fluxo web.")
+
+    st.divider()
+    st.button(
+        "📄 Gerar Fechamento",
+        use_container_width=True,
+        type="primary",
+        disabled=True,
+        help="Ainda não construído — é a próxima etapa (Etapa 3), monta o dashboard final em cima desses mesmos números.",
+    )
 
 
 # ------------------------------------------------------------------
@@ -781,3 +936,6 @@ if st.session_state.tela == "home":
     tela_home()
 elif st.session_state.tela == "etapa1":
     tela_etapa1()
+elif st.session_state.tela == "previa_fechamento":
+    tela_previa_fechamento()
+
