@@ -95,10 +95,28 @@ def monta_linhas_analise_do_dia(linhas_csv, base_das, motorista_real_da_rota, ba
     return linhas
 
 
-def monta_linhas_resumo(linhas, resultado_calculo, n_ja_conhecidos, nome_usuario, data_criacao_str):
+LIMITE_TBRS_NA_FRASE = 10
+
+
+def _lista_tbrs_ate_limite(tbrs):
+    """Formata uma lista de TBRs pra entrar dentro da frase do resumo -
+    mesmo padrao ja usado em calculo_fechamento.monta_observacoes pro
+    'PCT NA' (lista os primeiros 10, com '...' se sobrar mais que
+    isso). So entra na frase quando a lista nao esta vazia."""
+    if not tbrs:
+        return ""
+    texto = ", ".join(tbrs[:LIMITE_TBRS_NA_FRASE])
+    if len(tbrs) > LIMITE_TBRS_NA_FRASE:
+        texto += ", ..."
+    return f" ({texto})"
+
+
+def monta_linhas_resumo(linhas, resultado_calculo, tbrs_ja_conhecidos, nome_usuario, data_criacao_str):
     """Monta as frases do resumo no topo da aba, mesmo padrao do robo
     SSW 081 (celula mesclada, uma frase por linha). Pedido do Samuel em
-    13/09/2026.
+    13/09/2026 (13/09 tambem pediu pra listar os TBRs revalidados
+    automatico na propria frase, pra dar pra auditar sem abrir mais
+    nada).
 
     Contas:
       - entregues: contagem_scc['Delivered'], ja calculado pelo
@@ -107,9 +125,9 @@ def monta_linhas_resumo(linhas, resultado_calculo, n_ja_conhecidos, nome_usuario
         ROTA' (classificacao automatica de In Transit/Failed com DA de
         verdade vinculado - ver state_finalizador.py) - ainda nao
         confirmado como entregue nem como insucesso.
-      - revalidados sem alteracao: n_ja_conhecidos, que PRECISA vir de
-        fora (Etapa 2, historico_tbr.decide_quem_precisa_reabrir) - nao
-        da pra saber só pelo resultado final quem reaproveitou a
+      - revalidados sem alteracao: tbrs_ja_conhecidos, que PRECISA vir
+        de fora (Etapa 2, historico_tbr.decide_quem_precisa_reabrir) -
+        nao da pra saber só pelo resultado final quem reaproveitou a
         classificacao de ontem e quem foi digitado hoje, os dois
         terminam com o mesmo texto salvo.
       - validados por pessoa hoje: o resto de quem nao foi entregue
@@ -124,13 +142,15 @@ def monta_linhas_resumo(linhas, resultado_calculo, n_ja_conhecidos, nome_usuario
     em_rota = sum(
         1 for l in linhas if l.get(COL_STATE_FINALIZADOR, "").upper().startswith("EM ROTA")
     )
+    n_ja_conhecidos = len(tbrs_ja_conhecidos)
     nao_entregues = total - entregues
     validados_hoje = max(nao_entregues - em_rota - n_ja_conhecidos, 0)
     insucesso_sem_parceiro = resultado_calculo["contagem_insucesso"].get("sem_detalhe", 0)
 
     return [
         f"{entregues} pacotes entregues",
-        f"{n_ja_conhecidos} pacotes revalidados com state sem alteração",
+        f"{n_ja_conhecidos} pacotes revalidados com state sem alteração"
+        + _lista_tbrs_ate_limite(tbrs_ja_conhecidos),
         f"{validados_hoje} pacotes validados por {nome_usuario} dia {data_criacao_str}",
         f"{em_rota} pacotes ainda em rota",
         f"{insucesso_sem_parceiro} pacotes de insucesso sem parceiro atrelado",
@@ -224,7 +244,7 @@ def escreve_aba_analise_do_dia(wb, linhas, linhas_resumo=None):
 
 def gera_workbook_fechamento(
     linhas_csv, base_das, motorista_real_da_rota, base_tbr,
-    resultado_calculo, n_ja_conhecidos, nome_usuario, data_criacao_str,
+    resultado_calculo, tbrs_ja_conhecidos, nome_usuario, data_criacao_str,
 ):
     """Ponto de entrada. Por enquanto so a aba 'Analise do dia' - as abas
     'Apresentacao' e 'Historico' entram nas proximas levas, depois de
@@ -232,10 +252,10 @@ def gera_workbook_fechamento(
 
     resultado_calculo: dict devolvido por calculo_fechamento.calcula_tudo
     (usa contagem_scc e contagem_insucesso pro resumo).
-    n_ja_conhecidos: quantidade de TBRs que reaproveitaram a
+    tbrs_ja_conhecidos: lista de TBRs (strings) que reaproveitaram a
     classificacao de ontem sem revisao nova hoje (vem da Etapa 2,
-    historico_tbr.decide_quem_precisa_reabrir - nao da pra calcular
-    aqui dentro).
+    historico_tbr.decide_quem_precisa_reabrir - a lista 'ja_conhecidos'
+    de la, so os TBRs; nao da pra calcular aqui dentro).
     nome_usuario: st.session_state.nome_usuario (quem esta logado no
     app nessa sessao).
     data_criacao_str: data de hoje ja formatada 'dd/mm/aaaa'.
@@ -246,7 +266,7 @@ def gera_workbook_fechamento(
 
     linhas_base = monta_linhas_analise_do_dia(linhas_csv, base_das, motorista_real_da_rota, base_tbr)
     linhas_resumo = monta_linhas_resumo(
-        linhas_base, resultado_calculo, n_ja_conhecidos, nome_usuario, data_criacao_str
+        linhas_base, resultado_calculo, tbrs_ja_conhecidos, nome_usuario, data_criacao_str
     )
     escreve_aba_analise_do_dia(wb, linhas_base, linhas_resumo)
 
