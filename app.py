@@ -40,6 +40,7 @@ from state_finalizador import (
 )
 from calculo_fechamento import calcula_tudo, monta_dados_do_dia
 from dashboard_fechamento import gera_html_fechamento
+from exporta_fechamento import gera_workbook_fechamento
 import parceiros as parceiros_mod
 
 NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
@@ -49,6 +50,24 @@ NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
 CAMINHO_BASE_DAS = f"dados_nodes/{NODE_ATUAL}/base_das_dmnz.csv"
 CAMINHO_HISTORICO_TBR = f"dados_nodes/{NODE_ATUAL}/historico_scc_analise.csv"
 CAMINHO_PARCEIROS = f"dados_nodes/{NODE_ATUAL}/parceiros.csv"
+
+
+def _monta_insumos_export(linhas_csv, base_tbr, base_das, resultado, data_hoje_str):
+    """Empacota tudo que exporta_fechamento.gera_workbook_fechamento vai
+    precisar na Etapa 3, pra guardar em st.session_state - sao variaveis
+    locais da Etapa 2 (existem só durante essa execução do Streamlit),
+    então precisam ser persistidas explicitamente pra sobreviver até a
+    tela de Fechamento (outra tela, outro rerun). Pedido do Samuel em
+    13/09/2026, junto com o Excel da aba 'Analise do dia'."""
+    return {
+        "linhas_csv": linhas_csv,
+        "base_das": base_das,
+        "motorista_real_da_rota": resultado["motorista_real_da_rota"],
+        "base_tbr": base_tbr,
+        "tbrs_ja_conhecidos": [c["tbr"] for c in resultado["conhecidos"]],
+        "data_hoje_str": data_hoje_str,
+    }
+
 
 st.set_page_config(page_title="Painel Operação DMNZ - AMXL", page_icon="📦", layout="wide")
 
@@ -86,6 +105,8 @@ if "tem_na" not in st.session_state:
     st.session_state.tem_na = False
 if "dados_fechamento" not in st.session_state:
     st.session_state.dados_fechamento = None
+if "export_fechamento_insumos" not in st.session_state:
+    st.session_state.export_fechamento_insumos = None
 
 
 def vai_para(tela):
@@ -713,6 +734,9 @@ def tela_etapa1():
                                                 resultado["motorista_real_da_rota"],
                                             )
                                             st.session_state.dados_fechamento = calcula_tudo(dados_dia, NODE_ATUAL, lista_parceiros)
+                                            st.session_state.export_fechamento_insumos = _monta_insumos_export(
+                                                linhas_csv, base_tbr, base_dict, resultado, data_hoje_str,
+                                            )
                                             vai_para("previa_fechamento")
                                             st.rerun()
                                     elif st.button(
@@ -728,6 +752,9 @@ def tela_etapa1():
                                             resultado["motorista_real_da_rota"],
                                         )
                                         st.session_state.dados_fechamento = calcula_tudo(dados_dia, NODE_ATUAL, lista_parceiros)
+                                        st.session_state.export_fechamento_insumos = _monta_insumos_export(
+                                            linhas_csv, base_tbr, base_dict, resultado, data_hoje_str,
+                                        )
                                         vai_para("previa_fechamento")
                                         st.rerun()
                                 else:
@@ -950,6 +977,9 @@ def tela_etapa1():
                                                     resultado["motorista_real_da_rota"],
                                                 )
                                                 st.session_state.dados_fechamento = calcula_tudo(dados_dia, NODE_ATUAL, lista_parceiros)
+                                                st.session_state.export_fechamento_insumos = _monta_insumos_export(
+                                                    linhas_csv, base_tbr, base_dict, resultado, data_hoje_str,
+                                                )
                                                 vai_para("previa_fechamento")
                                                 st.rerun()
 
@@ -1144,6 +1174,34 @@ def tela_fechamento_final():
         "faltam os arquivos de imagem e a integração da base de Reversa."
     )
 
+    # Excel pra download - pedido do Samuel em 13/09/2026. Precisa dos
+    # insumos guardados na Etapa 2 (ver _monta_insumos_export); se a
+    # sessão foi reiniciada só com dados_fechamento sobrevivendo (não
+    # deveria acontecer, os dois são salvos juntos, mas por garantia),
+    # avisa em vez de quebrar a tela.
+    insumos = st.session_state.export_fechamento_insumos
+    st.divider()
+    if insumos is None:
+        st.info(
+            "Excel não disponível pra essa sessão (dados de origem não encontrados) "
+            "— volta e roda o State Finalizador de novo pra gerar o download."
+        )
+    else:
+        xlsx_bytes = gera_workbook_fechamento(
+            insumos["linhas_csv"], insumos["base_das"], insumos["motorista_real_da_rota"],
+            insumos["base_tbr"], r, insumos["tbrs_ja_conhecidos"],
+            st.session_state.nome_usuario, insumos["data_hoje_str"],
+        )
+        # Nome pedido pelo Samuel em 13/09/2026: "LRN9 DD/MM" - troquei a
+        # "/" por "-" porque barra não é permitida em nome de arquivo
+        # (quebra no Windows e em outros sistemas).
+        st.download_button(
+            "⬇️ Baixar Excel (Análise do dia)",
+            data=xlsx_bytes,
+            file_name=f"{NODE_ATUAL} {data_do_fechamento.strftime('%d-%m')}.xlsx",
+            use_container_width=True,
+        )
+
 
 # ------------------------------------------------------------------
 # PARCEIROS DO NODE — cadastro de quem atua na base (a própria empresa +
@@ -1260,4 +1318,3 @@ elif st.session_state.tela == "fechamento_final":
     tela_fechamento_final()
 elif st.session_state.tela == "parceiros":
     tela_parceiros()
-
