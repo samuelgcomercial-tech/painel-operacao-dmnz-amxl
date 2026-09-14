@@ -1191,6 +1191,7 @@ def tela_fechamento_final():
             insumos["linhas_csv"], insumos["base_das"], insumos["motorista_real_da_rota"],
             insumos["base_tbr"], r, insumos["tbrs_ja_conhecidos"],
             st.session_state.nome_usuario, insumos["data_hoje_str"],
+            NODE_ATUAL, data_do_fechamento,
         )
         # Nome pedido pelo Samuel em 13/09/2026: "LRN9 DD/MM" - troquei a
         # "/" por "-" porque barra não é permitida em nome de arquivo
