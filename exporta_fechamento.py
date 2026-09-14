@@ -406,16 +406,27 @@ def escreve_aba_apresentacao(wb, resultado_calculo, node, data_fechamento):
     row_inicio = row_titulo + 2
     r = resultado_calculo
 
-    row = row_inicio
-    row = _escreve_painel_state_scc(ws, row, r["contagem_scc"], r["total_geral"], COL_ESQUERDA)
-    row = _escreve_painel_entregas_dmnz(ws, row, r["n_dmnz"], COL_ESQUERDA)
+    # Painel 1 (esquerda) e Painel 4 (direita) quase nunca tem a mesma
+    # altura (State SCC costuma ter mais categorias que Insucesso) - sem
+    # ajuste, o titulo do Painel 2 ("STATE ENTREGAS DMNZ") e do Painel 5
+    # ("MNR's") ficavam em linhas bem diferentes, um bem mais acima que
+    # o outro. Pedido do Samuel em 14/09/2026: alinhar os dois na MESMA
+    # linha - calcula onde cada um terminaria sozinho, pega a linha mais
+    # embaixo das duas, e usa ela como ponto de partida dos dois (o
+    # bloco mais curto so ganha um respiro em branco a mais antes do
+    # proprio titulo).
+    row_apos_painel1 = _escreve_painel_state_scc(
+        ws, row_inicio, r["contagem_scc"], r["total_geral"], COL_ESQUERDA
+    )
+    row_apos_painel4 = _escreve_painel_insucesso(
+        ws, row_inicio, r["contagem_insucesso"], COL_DIREITA
+    )
+    row_meio = max(row_apos_painel1, row_apos_painel4)
 
-    row = row_inicio
-    row = _escreve_painel_nested(ws, row, r["nested"], r["total_geral"], COL_CENTRO)
+    _escreve_painel_entregas_dmnz(ws, row_meio, r["n_dmnz"], COL_ESQUERDA)
+    _escreve_painel_mnr(ws, row_meio, r["total_mnr"], COL_DIREITA)
 
-    row = row_inicio
-    row = _escreve_painel_insucesso(ws, row, r["contagem_insucesso"], COL_DIREITA)
-    row = _escreve_painel_mnr(ws, row, r["total_mnr"], COL_DIREITA)
+    _escreve_painel_nested(ws, row_inicio, r["nested"], r["total_geral"], COL_CENTRO)
 
     larguras = {
         "A": 24, "B": 10,   # esquerda - estreita
