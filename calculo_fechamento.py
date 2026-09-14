@@ -21,7 +21,7 @@ Ainda NAO inclui (fica pra depois, de proposito):
 import unicodedata
 from collections import Counter, OrderedDict
 
-from state_finalizador import monta_coluna_das_dmnz
+from state_finalizador import monta_coluna_das_dmnz, normaliza_state_scc
 import parceiros as parceiros_mod
 
 
@@ -50,7 +50,12 @@ def monta_dados_do_dia(linhas_csv, base_tbr, base_das, motorista_real_da_rota):
     dados = []
     for l in linhas_csv:
         tbr = l["Tracking ID"]
-        state_scc = (l.get("State") or "").strip()
+        # normaliza_state_scc troca State vazio por "SEM STATE SCC" -
+        # pedido do Samuel em 14/09/2026, mesma funcao usada em
+        # state_finalizador.processa() pra nunca sobrar rotulo de grupo
+        # em branco (aqui, na categoria do painel 1/3 e no nome da
+        # coluna "State" do Excel).
+        state_scc = normaliza_state_scc(l.get("State"))
         if state_scc.lower() == "delivered":
             finalizador = "Entregue"
         else:
