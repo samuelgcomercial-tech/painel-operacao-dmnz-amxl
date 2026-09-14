@@ -33,7 +33,7 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
-from state_finalizador import monta_coluna_das_dmnz
+from state_finalizador import monta_coluna_das_dmnz, normaliza_state_scc
 
 # Mesma ordem/nomes de coluna do CSV cru exportado pelo SCC - conferido
 # com o arquivo real (SearchResults_4.csv) em 13/09/2026.
@@ -82,7 +82,11 @@ def monta_linhas_analise_do_dia(linhas_csv, base_das, motorista_real_da_rota, ba
     linhas = []
     for l in linhas_csv:
         tbr = l["Tracking ID"]
-        state_scc = (l.get("State") or "").strip()
+        # normaliza_state_scc troca State vazio por "SEM STATE SCC" -
+        # pedido do Samuel em 14/09/2026, mesma funcao usada no resto do
+        # robo (state_finalizador.py e calculo_fechamento.py), pra nunca
+        # sobrar celula em branco na coluna "State" do Excel.
+        state_scc = normaliza_state_scc(l.get("State"))
         if state_scc.lower() == "delivered":
             finalizador = "Entregue"
         else:
@@ -90,6 +94,7 @@ def monta_linhas_analise_do_dia(linhas_csv, base_das, motorista_real_da_rota, ba
             finalizador = entrada["classificacao"] if entrada else ""
 
         linha = {col: l.get(col, "") for col in COLUNAS_CSV_ORIGINAL}
+        linha["State"] = state_scc
         linha[COL_DATA_HORA] = _parseia_data_hora(linha[COL_DATA_HORA])
         linha[COL_STATE_DAS] = dmnz_por_tbr.get(tbr, "")
         linha[COL_STATE_FINALIZADOR] = finalizador
@@ -463,4 +468,3 @@ def gera_workbook_fechamento(
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
-
