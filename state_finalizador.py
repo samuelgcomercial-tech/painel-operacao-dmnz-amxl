@@ -56,13 +56,29 @@ def classifica_dmnz_ou_parceiro(nome_da, rota, base_das, motorista_real_da_rota)
     return "DMNZ" if base_das.get(nome_real_norm) == "DMNZ" else "PARCEIRO"
 
 
-def eh_state_vazio(state_scc):
-    """TBR que chegou do SCC sem nenhum State preenchido - acontece de vez
-    em quando (falha de sincronizacao do proprio SCC). Nao tem State
-    Finalizador nenhum pra deduzir dai, entao classifica automatico como
-    'SEM STATE SCC' em vez de pedir revisao manual - nao ha nada pra
-    revisar, o problema e o dado que nao veio."""
-    return not (state_scc or "").strip()
+TEXTO_STATE_VAZIO = "SEM STATE SCC"
+
+
+def normaliza_state_scc(state_scc):
+    """Texto do 'State' bruto do CSV do SCC, trocando vazio por um texto
+    visivel ('SEM STATE SCC') - acontece de vez em quando (falha de
+    sincronizacao do proprio SCC). Usado em TODO lugar que le o 'State'
+    direto do CSV (aqui, calculo_fechamento.py e exporta_fechamento.py),
+    pra nunca sobrar uma celula/rotulo de grupo em branco na tela ou no
+    Excel.
+
+    Ajustado a pedido do Samuel em 14/09/2026: ANTES esse caso virava
+    'SEM STATE SCC' tambem no STATE FINALIZADOR, automatico, sem pedir
+    revisao (ver historico do 'auto_sem_state' removido de processa()
+    abaixo) - so trocava o rotulo em branco por essa mesma frase, mas de
+    quebra tambem pulava a revisao manual, o que nao fazia sentido (o
+    State SCC vir vazio nao diz NADA sobre o que aconteceu com o
+    pacote). Agora SO o texto do State fica visivel automatico - o State
+    Finalizador desses TBRs continua pedindo revisao manual normal,
+    igual qualquer outro TBR nao-Delivered (cai no grupo pendente
+    'SEM STATE SCC', igual um grupo por State normal)."""
+    state_scc = (state_scc or "").strip()
+    return state_scc if state_scc else TEXTO_STATE_VAZIO
 
 
 TEXTO_CANCELADO_ANTES_ROTA = "CANCELADO - CLIENTE"
@@ -190,7 +206,14 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str, tbrs_marcados_na=Non
         acompanhamento do dia, sem afirmar DMNZ/parceiro
       - conhecidos: lista de dicts (do historico) reaproveitados sem mudanca
       - pendentes: lista de dicts {tbr, state_scc, motivo_reabertura, last_scan_by, route_code}
-        agrupaveis por state_scc - precisam de revisao manual na tela
+        agrupaveis por state_scc - precisam de revisao manual na tela.
+        TBR que chegou com o State do SCC vazio TAMBÉM cai aqui (com
+        state_scc já normalizado pra "SEM STATE SCC" - ver
+        normaliza_state_scc - então forma o próprio grupo "SEM STATE
+        SCC" na tela de revisão, igual qualquer outro State) - não tem
+        mais bucket automático pra esse caso (removido a pedido do
+        Samuel em 14/09/2026: o State vir vazio não diz nada sobre o
+        que aconteceu com o pacote, então não devia pular a revisão).
       - motorista_real_da_rota: dict rota -> nome (usado depois pra montar
         a coluna final "DAs DMNZ")
     """
@@ -202,7 +225,7 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str, tbrs_marcados_na=Non
     nao_entregues = [
         {
             "tbr": l["Tracking ID"],
-            "state_scc": l["State"],
+            "state_scc": normaliza_state_scc(l.get("State")),
             "last_scan_by": (l.get("Last Scan By") or "").strip(),
             "route_code": (l.get("Route Code") or "").strip(),
             "operation": (l.get("Operation") or "").strip(),
@@ -215,16 +238,21 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str, tbrs_marcados_na=Non
     reabrir, conhecidos = decide_quem_precisa_reabrir(nao_entregues, base_tbr)
 
     auto_em_rota = []
-    auto_sem_state = []
     auto_cancelado = []
     auto_outro_node = []
     auto_na = []
     precisa_validacao_na = []
     pendentes = []
     for r in reabrir:
-        if eh_state_vazio(r["state_scc"]):
-            auto_sem_state.append({**r, "resposta": "SEM STATE SCC"})
-        elif eh_cancelado_antes_da_rota(r["operation"]):
+        # Reparo pedido pelo Samuel em 14/09/2026: State do SCC vazio
+        # (r["state_scc"] == TEXTO_STATE_VAZIO, ja normalizado acima) NAO
+        # tem mais um branch automatico aqui - antes pulava a revisao e
+        # gravava "SEM STATE SCC" direto no historico; agora cai no
+        # "else" no fim da cadeia igual qualquer outro TBR nao-Delivered
+        # (nenhuma das outras regras abaixo depende do texto do State em
+        # si, so de Operation/Reason/Last Scan By - um State vazio nunca
+        # bate com elas por acidente).
+        if eh_cancelado_antes_da_rota(r["operation"]):
             auto_cancelado.append({**r, "resposta": TEXTO_CANCELADO_ANTES_ROTA})
         elif eh_outro_node(r["reason"]):
             auto_outro_node.append({**r, "resposta": "PCT OUTRO NODE"})
@@ -264,7 +292,6 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str, tbrs_marcados_na=Non
     return {
         "entregues": entregues,
         "auto_em_rota": auto_em_rota,
-        "auto_sem_state": auto_sem_state,
         "auto_cancelado": auto_cancelado,
         "auto_outro_node": auto_outro_node,
         "auto_na": auto_na,
