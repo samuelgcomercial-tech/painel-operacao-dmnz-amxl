@@ -264,12 +264,24 @@ COR_CATEGORIA_HEX = "FFE8E8E8"  # cinza claro so pra destacar a linha-categoria 
 BORDA_TOPO = Border(top=Side(style="thin"))
 
 
-def _preenche_cabecalho_painel(ws, row, titulo):
-    """Titulo de painel (ex: '1. STATE SCC'), mesclado nas 2 colunas,
-    fundo laranja e fonte branca - mesmo visual do cabecalho de painel
-    do dashboard HTML."""
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
-    cel = ws.cell(row=row, column=1, value=titulo)
+# Layout em 3 blocos de colunas lado a lado - mesmo esquema do grid de 3
+# colunas do dashboard HTML (.fech-grid: col1 | col2 | col3), pedido do
+# Samuel em 14/09/2026: o painel 3 (nested, o que mais parece tabela
+# dinamica) fica CENTRAL e mais largo, com os paineis menores nas
+# colunas estreitas dos dois lados - painel 1+2 na esquerda, painel
+# 4+5 na direita. Cada bloco e "label" (col N) + "valor" (col N+1);
+# uma coluna em branco separa um bloco do outro.
+COL_ESQUERDA = 1  # A/B - paineis 1 e 2
+COL_CENTRO = 4    # D/E - painel 3 (nested)
+COL_DIREITA = 7   # G/H - paineis 4 e 5
+
+
+def _preenche_cabecalho_painel(ws, row, titulo, col_ini=COL_ESQUERDA):
+    """Titulo de painel (ex: '1. STATE SCC'), mesclado nas 2 colunas do
+    bloco (col_ini e col_ini+1), fundo laranja e fonte branca - mesmo
+    visual do cabecalho de painel do dashboard HTML."""
+    ws.merge_cells(start_row=row, start_column=col_ini, end_row=row, end_column=col_ini + 1)
+    cel = ws.cell(row=row, column=col_ini, value=titulo)
     cel.font = Font(bold=True, color="FFFFFFFF")
     cel.fill = PatternFill(fill_type="solid", fgColor=COR_LARANJA_HEX)
     cel.alignment = Alignment(horizontal="left", vertical="center")
@@ -277,14 +289,18 @@ def _preenche_cabecalho_painel(ws, row, titulo):
     return row + 1
 
 
-def _escreve_linha_painel(ws, row, label, valor, indent=0, bold=False, fill=None, borda_topo=False, outline_level=0):
-    """Uma linha 'label | valor' dentro de um painel. indent>0 simula a
-    sub-linha indentada do dashboard (.linha.sub); outline_level>0
-    marca a linha como detalhe agrupavel (colapsavel no Excel, grupo
-    Dados > Agrupar) - usado nas sub-linhas do painel 3."""
-    cel_label = ws.cell(row=row, column=1, value=label)
+def _escreve_linha_painel(
+    ws, row, label, valor, col_ini=COL_ESQUERDA, indent=0, bold=False,
+    fill=None, borda_topo=False, outline_level=0,
+):
+    """Uma linha 'label | valor' dentro de um painel, no bloco de colunas
+    col_ini/col_ini+1. indent>0 simula a sub-linha indentada do
+    dashboard (.linha.sub); outline_level>0 marca a linha como detalhe
+    agrupavel (colapsavel no Excel, grupo Dados > Agrupar) - usado nas
+    sub-linhas do painel 3."""
+    cel_label = ws.cell(row=row, column=col_ini, value=label)
     cel_label.alignment = Alignment(horizontal="left", indent=indent)
-    cel_valor = ws.cell(row=row, column=2, value=valor)
+    cel_valor = ws.cell(row=row, column=col_ini + 1, value=valor)
     cel_valor.alignment = Alignment(horizontal="right")
     if bold:
         cel_label.font = Font(bold=True)
@@ -300,37 +316,37 @@ def _escreve_linha_painel(ws, row, label, valor, indent=0, bold=False, fill=None
     return row + 1
 
 
-def _escreve_painel_state_scc(ws, row, contagem_scc, total_geral):
-    row = _preenche_cabecalho_painel(ws, row, "1. STATE SCC")
+def _escreve_painel_state_scc(ws, row, contagem_scc, total_geral, col_ini=COL_ESQUERDA):
+    row = _preenche_cabecalho_painel(ws, row, "1. STATE SCC", col_ini)
     for cat, qtd in contagem_scc.most_common():
-        row = _escreve_linha_painel(ws, row, cat, qtd)
-    row = _escreve_linha_painel(ws, row, "Total Geral", total_geral, bold=True, borda_topo=True)
+        row = _escreve_linha_painel(ws, row, cat, qtd, col_ini)
+    row = _escreve_linha_painel(ws, row, "Total Geral", total_geral, col_ini, bold=True, borda_topo=True)
     return row + 1  # linha em branco de espacamento ate o proximo painel
 
 
-def _escreve_painel_entregas_dmnz(ws, row, n_dmnz):
-    row = _preenche_cabecalho_painel(ws, row, "2. STATE ENTREGAS DMNZ")
-    row = _escreve_linha_painel(ws, row, "DMNZ", n_dmnz)
+def _escreve_painel_entregas_dmnz(ws, row, n_dmnz, col_ini=COL_ESQUERDA):
+    row = _preenche_cabecalho_painel(ws, row, "2. STATE ENTREGAS DMNZ", col_ini)
+    row = _escreve_linha_painel(ws, row, "DMNZ", n_dmnz, col_ini)
     return row + 1
 
 
 FILL_CATEGORIA = PatternFill(fill_type="solid", fgColor=COR_CATEGORIA_HEX)
 
 
-def _escreve_painel_nested(ws, row, nested, total_geral):
-    row = _preenche_cabecalho_painel(ws, row, "3. STATE SCC & ANÁLISE DMNZ")
+def _escreve_painel_nested(ws, row, nested, total_geral, col_ini=COL_CENTRO):
+    row = _preenche_cabecalho_painel(ws, row, "3. STATE SCC & ANÁLISE DMNZ", col_ini)
     for cat, subitens in nested.items():
-        row = _escreve_linha_painel(ws, row, cat, "", bold=True, fill=FILL_CATEGORIA)
+        row = _escreve_linha_painel(ws, row, cat, "", col_ini, bold=True, fill=FILL_CATEGORIA)
         for fin, qtd in subitens.items():
             row = _escreve_linha_painel(
-                ws, row, fin or "(sem State Finalizador)", qtd, indent=1, outline_level=1
+                ws, row, fin or "(sem State Finalizador)", qtd, col_ini, indent=1, outline_level=1
             )
-    row = _escreve_linha_painel(ws, row, "Total Geral", total_geral, bold=True, borda_topo=True)
+    row = _escreve_linha_painel(ws, row, "Total Geral", total_geral, col_ini, bold=True, borda_topo=True)
     return row + 1
 
 
-def _escreve_painel_insucesso(ws, row, contagem_insucesso):
-    row = _preenche_cabecalho_painel(ws, row, "4. ANÁLISE INSUCESSO")
+def _escreve_painel_insucesso(ws, row, contagem_insucesso, col_ini=COL_DIREITA):
+    row = _preenche_cabecalho_painel(ws, row, "4. ANÁLISE INSUCESSO", col_ini)
     # mesma ordenacao do dashboard: "sem_detalhe" por ultimo de proposito
     # (e o caso que precisa de atencao, nao compete por ordem com os
     # nomes de parceiro de verdade).
@@ -340,25 +356,30 @@ def _escreve_painel_insucesso(ws, row, contagem_insucesso):
     if itens:
         for nome, qtd in itens:
             label = "Insucesso (sem detalhe)" if nome == "sem_detalhe" else f"Insucesso {nome}"
-            row = _escreve_linha_painel(ws, row, label, qtd)
+            row = _escreve_linha_painel(ws, row, label, qtd, col_ini)
     else:
-        row = _escreve_linha_painel(ws, row, "Sem registros", "-")
+        row = _escreve_linha_painel(ws, row, "Sem registros", "-", col_ini)
     return row + 1
 
 
-def _escreve_painel_mnr(ws, row, total_mnr):
-    row = _preenche_cabecalho_painel(ws, row, "5. MNR's")
+def _escreve_painel_mnr(ws, row, total_mnr, col_ini=COL_DIREITA):
+    row = _preenche_cabecalho_painel(ws, row, "5. MNR's", col_ini)
     if total_mnr:
-        row = _escreve_linha_painel(ws, row, "MNR", total_mnr)
+        row = _escreve_linha_painel(ws, row, "MNR", total_mnr, col_ini)
     else:
-        row = _escreve_linha_painel(ws, row, "Sem registros", "-")
+        row = _escreve_linha_painel(ws, row, "Sem registros", "-", col_ini)
     return row + 1
 
 
 def escreve_aba_apresentacao(wb, resultado_calculo, node, data_fechamento):
-    """Segunda aba: os 5 paineis acima, um embaixo do outro (colunas A =
-    rotulo, B = valor). 'resultado_calculo' e o mesmo dict devolvido por
-    calculo_fechamento.calcula_tudo (o mesmo que ja alimenta o
+    """Segunda aba: os mesmos 5 paineis, agora em 3 blocos de coluna lado
+    a lado (esquerda | centro | direita), igual o grid de 3 colunas do
+    dashboard HTML - painel 3 (o "tabela dinamica" simulado) central e
+    mais largo, paineis 1+2 na coluna estreita da esquerda, paineis
+    4+5 na coluna estreita da direita. Cada bloco cresce pra baixo de
+    forma independente (alturas diferentes normais - o painel 3 quase
+    sempre e o mais alto). 'resultado_calculo' e o mesmo dict devolvido
+    por calculo_fechamento.calcula_tudo (o mesmo que ja alimenta o
     dashboard HTML - nunca recalcula nada diferente aqui)."""
     ws = wb.create_sheet("Apresentação")
     ws.sheet_view.showGridLines = False
@@ -368,25 +389,38 @@ def escreve_aba_apresentacao(wb, resultado_calculo, node, data_fechamento):
     # categoria vem ANTES das sub-linhas, nao depois.
     ws.sheet_properties.outlinePr.summaryBelow = False
 
-    row = 1
+    row_titulo = 1
     titulo = f"Fechamento {node} – {data_fechamento.strftime('%d/%m/%Y')}"
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
-    cel = ws.cell(row=row, column=1, value=titulo)
+    ws.merge_cells(start_row=row_titulo, start_column=1, end_row=row_titulo, end_column=8)
+    cel = ws.cell(row=row_titulo, column=1, value=titulo)
     cel.font = Font(bold=True, color="FFFFFFFF")
     cel.fill = PatternFill(fill_type="solid", fgColor=COR_NAVY_HEX)
     cel.alignment = Alignment(horizontal="left", vertical="center")
-    ws.row_dimensions[row].height = 20
-    row += 2
+    ws.row_dimensions[row_titulo].height = 20
 
+    row_inicio = row_titulo + 2
     r = resultado_calculo
-    row = _escreve_painel_state_scc(ws, row, r["contagem_scc"], r["total_geral"])
-    row = _escreve_painel_entregas_dmnz(ws, row, r["n_dmnz"])
-    row = _escreve_painel_nested(ws, row, r["nested"], r["total_geral"])
-    row = _escreve_painel_insucesso(ws, row, r["contagem_insucesso"])
-    row = _escreve_painel_mnr(ws, row, r["total_mnr"])
 
-    ws.column_dimensions["A"].width = 42
-    ws.column_dimensions["B"].width = 14
+    row = row_inicio
+    row = _escreve_painel_state_scc(ws, row, r["contagem_scc"], r["total_geral"], COL_ESQUERDA)
+    row = _escreve_painel_entregas_dmnz(ws, row, r["n_dmnz"], COL_ESQUERDA)
+
+    row = row_inicio
+    row = _escreve_painel_nested(ws, row, r["nested"], r["total_geral"], COL_CENTRO)
+
+    row = row_inicio
+    row = _escreve_painel_insucesso(ws, row, r["contagem_insucesso"], COL_DIREITA)
+    row = _escreve_painel_mnr(ws, row, r["total_mnr"], COL_DIREITA)
+
+    larguras = {
+        "A": 24, "B": 10,   # esquerda - estreita
+        "C": 3,             # espacador
+        "D": 34, "E": 12,   # centro - mais larga (painel "tabela dinamica")
+        "F": 3,             # espacador
+        "G": 22, "H": 10,   # direita - estreita
+    }
+    for letra, largura in larguras.items():
+        ws.column_dimensions[letra].width = largura
     return ws
 
 
