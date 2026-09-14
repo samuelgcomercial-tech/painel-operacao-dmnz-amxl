@@ -619,8 +619,6 @@ def tela_etapa1():
                                     "(automático) · "
                                     f"**{len(resultado['auto_em_rota'])} em rota** "
                                     "(automático, DA de verdade vinculado) · "
-                                    f"**{len(resultado['auto_sem_state'])} sem State** "
-                                    "(automático) · "
                                     f"**{len(resultado['auto_cancelado'])} cancelado(s)** "
                                     "(automático, antes da rota) · "
                                     f"**{len(resultado['auto_outro_node'])} outro node** "
@@ -677,7 +675,6 @@ def tela_etapa1():
                                     )
                                     automaticos_sem_pendentes = (
                                         resultado["auto_em_rota"]
-                                        + resultado["auto_sem_state"]
                                         + resultado["auto_cancelado"]
                                         + resultado["auto_outro_node"]
                                         + resultado["auto_na"]
@@ -895,7 +892,6 @@ def tela_etapa1():
                                     # o vislumbre completo antes de confirmar.
                                     automaticos = (
                                         resultado["auto_em_rota"]
-                                        + resultado["auto_sem_state"]
                                         + resultado["auto_cancelado"]
                                         + resultado["auto_outro_node"]
                                         + resultado["auto_na"]
@@ -1319,3 +1315,4 @@ elif st.session_state.tela == "fechamento_final":
     tela_fechamento_final()
 elif st.session_state.tela == "parceiros":
     tela_parceiros()
+
