@@ -5,7 +5,7 @@ exporta_fechamento.py (versao web)
 Gera o Excel final do Fechamento (Etapa 3) pra download - pedido do
 Samuel em 13/09/2026. Planejado em 3 abas, construidas uma de cada vez:
 
-  1. "Analise do dia" (esta primeira leva): uma linha por TBR, com TODAS
+  1. "Analise do dia" (leva 1, pronta): uma linha por TBR, com TODAS
      as colunas do CSV original do SCC + duas colunas calculadas no
      final (State DA's e State Finalizador). E a "base" pronta pra ele
      montar tabela dinamica de verdade em cima dela no Excel (criar a
@@ -13,21 +13,23 @@ Samuel em 13/09/2026. Planejado em 3 abas, construidas uma de cada vez:
      interno do arquivo - fragil e dificil de manter; a base "achatada"
      e o que da trabalho de verdade pra montar a mao, e isso o robo ja
      automatiza).
-  2. "Apresentacao" (proxima leva): versao formatada (sem linha de
-     grade, cabecalho fixo) dos paineis que ja saem no dashboard HTML
-     (calculo_fechamento.calcula_tudo), pro Samuel decidir).
-  3. "Historico" (ultima leva): export do historico_tbr.py (base
-     persistida no GitHub) pra auditoria - desde quando cada TBR
-     problematico foi visto e quando foi verificado pela ultima vez.
-
-Ainda NAO incluido (fica pra depois, junto com as abas 2 e 3 acima).
+  2. "Apresentacao" (leva 2, pronta - pedido do Samuel em 14/09/2026):
+     "replica" estatica dos 5 paineis que ja saem no dashboard HTML
+     (calculo_fechamento.calcula_tudo / dashboard_fechamento.py),
+     simulando o visual de tabela dinamica (grupos colapsaveis via
+     outline do Excel) ja que uma Tabela Dinamica de verdade nao da
+     pra gerar por codigo sem editar o XML interno na mao.
+  3. "Historico" (ultima leva, ainda NAO feita): export do
+     historico_tbr.py (base persistida no GitHub) pra auditoria -
+     desde quando cada TBR problematico foi visto e quando foi
+     verificado pela ultima vez.
 """
 
 import datetime as dt
 import io
 
 import openpyxl
-from openpyxl.styles import Font, Alignment
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
@@ -242,23 +244,176 @@ def escreve_aba_analise_do_dia(wb, linhas, linhas_resumo=None):
     return ws
 
 
+# --- Aba "Apresentacao" -----------------------------------------------
+#
+# "Replica" estatica dos 5 paineis que ja saem no dashboard HTML
+# (dashboard_fechamento.gera_html_fechamento) - pedido do Samuel em
+# 14/09/2026. Nao da pra gerar uma Tabela Dinamica de verdade por
+# codigo sem mexer direto no XML interno (pivotCache/pivotTable -
+# fragil e dificil de manter, ver comentario no topo do arquivo), entao
+# essa aba SIMULA o resultado: mesmos numeros, mesmo agrupamento por
+# categoria (com os grupos aninhados do painel 3 colapsaveis via
+# outline do Excel, pra chegar mais perto da sensacao de tabela
+# dinamica). E uma FOTOGRAFIA deste fechamento - nao recalcula sozinha
+# se a aba "Analise do dia" for editada depois.
+
+COR_LARANJA_HEX = "FFFD4701"  # mesma cor de cabecalho de painel do dashboard_fechamento.py
+COR_NAVY_HEX = "FF000D2D"      # mesma cor do cabecalho geral do dashboard_fechamento.py
+COR_CATEGORIA_HEX = "FFE8E8E8"  # cinza claro so pra destacar a linha-categoria do painel 3
+
+BORDA_TOPO = Border(top=Side(style="thin"))
+
+
+def _preenche_cabecalho_painel(ws, row, titulo):
+    """Titulo de painel (ex: '1. STATE SCC'), mesclado nas 2 colunas,
+    fundo laranja e fonte branca - mesmo visual do cabecalho de painel
+    do dashboard HTML."""
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+    cel = ws.cell(row=row, column=1, value=titulo)
+    cel.font = Font(bold=True, color="FFFFFFFF")
+    cel.fill = PatternFill(fill_type="solid", fgColor=COR_LARANJA_HEX)
+    cel.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[row].height = 18
+    return row + 1
+
+
+def _escreve_linha_painel(ws, row, label, valor, indent=0, bold=False, fill=None, borda_topo=False, outline_level=0):
+    """Uma linha 'label | valor' dentro de um painel. indent>0 simula a
+    sub-linha indentada do dashboard (.linha.sub); outline_level>0
+    marca a linha como detalhe agrupavel (colapsavel no Excel, grupo
+    Dados > Agrupar) - usado nas sub-linhas do painel 3."""
+    cel_label = ws.cell(row=row, column=1, value=label)
+    cel_label.alignment = Alignment(horizontal="left", indent=indent)
+    cel_valor = ws.cell(row=row, column=2, value=valor)
+    cel_valor.alignment = Alignment(horizontal="right")
+    if bold:
+        cel_label.font = Font(bold=True)
+        cel_valor.font = Font(bold=True)
+    if fill:
+        cel_label.fill = fill
+        cel_valor.fill = fill
+    if borda_topo:
+        cel_label.border = BORDA_TOPO
+        cel_valor.border = BORDA_TOPO
+    if outline_level:
+        ws.row_dimensions[row].outlineLevel = outline_level
+    return row + 1
+
+
+def _escreve_painel_state_scc(ws, row, contagem_scc, total_geral):
+    row = _preenche_cabecalho_painel(ws, row, "1. STATE SCC")
+    for cat, qtd in contagem_scc.most_common():
+        row = _escreve_linha_painel(ws, row, cat, qtd)
+    row = _escreve_linha_painel(ws, row, "Total Geral", total_geral, bold=True, borda_topo=True)
+    return row + 1  # linha em branco de espacamento ate o proximo painel
+
+
+def _escreve_painel_entregas_dmnz(ws, row, n_dmnz):
+    row = _preenche_cabecalho_painel(ws, row, "2. STATE ENTREGAS DMNZ")
+    row = _escreve_linha_painel(ws, row, "DMNZ", n_dmnz)
+    return row + 1
+
+
+FILL_CATEGORIA = PatternFill(fill_type="solid", fgColor=COR_CATEGORIA_HEX)
+
+
+def _escreve_painel_nested(ws, row, nested, total_geral):
+    row = _preenche_cabecalho_painel(ws, row, "3. STATE SCC & ANÁLISE DMNZ")
+    for cat, subitens in nested.items():
+        row = _escreve_linha_painel(ws, row, cat, "", bold=True, fill=FILL_CATEGORIA)
+        for fin, qtd in subitens.items():
+            row = _escreve_linha_painel(
+                ws, row, fin or "(sem State Finalizador)", qtd, indent=1, outline_level=1
+            )
+    row = _escreve_linha_painel(ws, row, "Total Geral", total_geral, bold=True, borda_topo=True)
+    return row + 1
+
+
+def _escreve_painel_insucesso(ws, row, contagem_insucesso):
+    row = _preenche_cabecalho_painel(ws, row, "4. ANÁLISE INSUCESSO")
+    # mesma ordenacao do dashboard: "sem_detalhe" por ultimo de proposito
+    # (e o caso que precisa de atencao, nao compete por ordem com os
+    # nomes de parceiro de verdade).
+    itens = sorted(
+        contagem_insucesso.items(), key=lambda kv: (kv[0] == "sem_detalhe", -kv[1])
+    )
+    if itens:
+        for nome, qtd in itens:
+            label = "Insucesso (sem detalhe)" if nome == "sem_detalhe" else f"Insucesso {nome}"
+            row = _escreve_linha_painel(ws, row, label, qtd)
+    else:
+        row = _escreve_linha_painel(ws, row, "Sem registros", "-")
+    return row + 1
+
+
+def _escreve_painel_mnr(ws, row, total_mnr):
+    row = _preenche_cabecalho_painel(ws, row, "5. MNR's")
+    if total_mnr:
+        row = _escreve_linha_painel(ws, row, "MNR", total_mnr)
+    else:
+        row = _escreve_linha_painel(ws, row, "Sem registros", "-")
+    return row + 1
+
+
+def escreve_aba_apresentacao(wb, resultado_calculo, node, data_fechamento):
+    """Segunda aba: os 5 paineis acima, um embaixo do outro (colunas A =
+    rotulo, B = valor). 'resultado_calculo' e o mesmo dict devolvido por
+    calculo_fechamento.calcula_tudo (o mesmo que ja alimenta o
+    dashboard HTML - nunca recalcula nada diferente aqui)."""
+    ws = wb.create_sheet("Apresentação")
+    ws.sheet_view.showGridLines = False
+    # Grupo do painel 3 colapsa/expande pelo BOTAO ACIMA do grupo (onde
+    # fica a linha-categoria), nao abaixo - contrario do padrao do
+    # Excel (resumo embaixo do detalhe), porque aqui o cabecalho da
+    # categoria vem ANTES das sub-linhas, nao depois.
+    ws.sheet_properties.outlinePr.summaryBelow = False
+
+    row = 1
+    titulo = f"Fechamento {node} – {data_fechamento.strftime('%d/%m/%Y')}"
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+    cel = ws.cell(row=row, column=1, value=titulo)
+    cel.font = Font(bold=True, color="FFFFFFFF")
+    cel.fill = PatternFill(fill_type="solid", fgColor=COR_NAVY_HEX)
+    cel.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[row].height = 20
+    row += 2
+
+    r = resultado_calculo
+    row = _escreve_painel_state_scc(ws, row, r["contagem_scc"], r["total_geral"])
+    row = _escreve_painel_entregas_dmnz(ws, row, r["n_dmnz"])
+    row = _escreve_painel_nested(ws, row, r["nested"], r["total_geral"])
+    row = _escreve_painel_insucesso(ws, row, r["contagem_insucesso"])
+    row = _escreve_painel_mnr(ws, row, r["total_mnr"])
+
+    ws.column_dimensions["A"].width = 42
+    ws.column_dimensions["B"].width = 14
+    return ws
+
+
 def gera_workbook_fechamento(
     linhas_csv, base_das, motorista_real_da_rota, base_tbr,
     resultado_calculo, tbrs_ja_conhecidos, nome_usuario, data_criacao_str,
+    node, data_fechamento,
 ):
-    """Ponto de entrada. Por enquanto so a aba 'Analise do dia' - as abas
-    'Apresentacao' e 'Historico' entram nas proximas levas, depois de
-    validar essa primeira.
+    """Ponto de entrada. Duas abas ja prontas ('Analise do dia' e
+    'Apresentacao') - a aba 'Historico' entra na proxima leva, depois
+    de validar essas duas.
 
     resultado_calculo: dict devolvido por calculo_fechamento.calcula_tudo
-    (usa contagem_scc e contagem_insucesso pro resumo).
+    (usa contagem_scc e contagem_insucesso pro resumo da aba 1, e todos
+    os campos pra aba 2).
     tbrs_ja_conhecidos: lista de TBRs (strings) que reaproveitaram a
     classificacao de ontem sem revisao nova hoje (vem da Etapa 2,
     historico_tbr.decide_quem_precisa_reabrir - a lista 'ja_conhecidos'
     de la, so os TBRs; nao da pra calcular aqui dentro).
     nome_usuario: st.session_state.nome_usuario (quem esta logado no
     app nessa sessao).
-    data_criacao_str: data de hoje ja formatada 'dd/mm/aaaa'.
+    data_criacao_str: data de hoje ja formatada 'dd/mm/aaaa' (dia em
+    que o Excel foi gerado - usada na frase do resumo da aba 1).
+    node: NODE_ATUAL do app.py (ex: 'LRN9') - so pro titulo da aba 2.
+    data_fechamento: data do ARQUIVO de rotas (st.session_state.
+    data_arquivo_rotas), mesma usada no titulo do dashboard HTML e no
+    nome do arquivo - so pro titulo da aba 2.
 
     Devolve bytes prontos pro st.download_button do app.py."""
     wb = openpyxl.Workbook()
@@ -269,7 +424,9 @@ def gera_workbook_fechamento(
         linhas_base, resultado_calculo, tbrs_ja_conhecidos, nome_usuario, data_criacao_str
     )
     escreve_aba_analise_do_dia(wb, linhas_base, linhas_resumo)
+    escreve_aba_apresentacao(wb, resultado_calculo, node, data_fechamento)
 
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
