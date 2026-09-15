@@ -118,7 +118,7 @@ def vai_para(tela):
 # ------------------------------------------------------------------
 def tela_home():
     st.title("📦 Painel Operação DMNZ - AMXL")
-    st.caption("Fechamento LRN9")
+    st.caption("Fechamento DMNNZ")
 
     st.session_state.nome_usuario = st.text_input(
         "Seu nome",
