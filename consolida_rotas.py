@@ -22,9 +22,22 @@ import openpyxl
 NODES_CONHECIDOS = {"LRN9", "LFO9", "LPB9", "LRE9", "LPA9", "LSA8", "LBH9", "SXL9"}
 PADRAO_NODE = re.compile(r"L[A-Z]{2}\d")
 
-# procura AAAAMMDD em qualquer parte do nome do arquivo (ex:
-# "LRN9_CYCLE_1_20260812true.xlsx" -> 2026-08-12)
-PADRAO_DATA_NOME = re.compile(r"(20\d{2})(\d{2})(\d{2})")
+# procura uma data em qualquer parte do nome do arquivo, com OU sem
+# separador entre ano/mes/dia (ex: "LRN9_CYCLE_1_20260812true.xlsx" ->
+# 2026-08-12, "LRN9_CYCLE_1_2026-09-14.xlsx" -> 2026-09-14). Bug
+# corrigido em 15/09/2026 (apontado pelo Samuel: um fechamento gerou
+# com a data de HOJE em vez da data certa do arquivo) - o padrao antigo
+# so aceitava os 8 digitos GRUDADOS (AAAAMMDD), entao um nome com
+# traco/underscore entre os grupos (AAAA-MM-DD, que os indianos tambem
+# usam de vez em quando - ja vimos os dois formatos em arquivos reais)
+# nao batia com NADA, caia pro fallback (data de criacao do proprio
+# Excel) - e essa data de criacao reflete quando o ARQUIVO foi
+# salvo/baixado no disco, nao o dia do ciclo de rotas, entao podia vir
+# igual a "hoje" por coincidencia (ex: arquivo do ciclo de ontem, mas
+# baixado hoje) - SEM avisar nada, porque o aviso de "arquivo de outro
+# dia" (tela_etapa1) so dispara quando a data detectada e DIFERENTE de
+# hoje, e nesse caso as duas coincidiam.
+PADRAO_DATA_NOME = re.compile(r"(20\d{2})[-_]?(\d{2})[-_]?(\d{2})")
 
 
 def detecta_node_do_nome(nome_arquivo):
