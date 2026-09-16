@@ -174,6 +174,33 @@ def eh_state_auto_em_rota(state_scc, last_scan_by):
     return eh_in_transit_ou_failed and eh_da_de_verdade(last_scan_by)
 
 
+def eh_retorno_apos_em_rota(classificacao_anterior):
+    """A classificacao SALVA (de uma rodada anterior desse MESMO dia, ou
+    de um dia anterior) comecava com 'EM ROTA -' - foi capturada
+    automaticamente pelo Last Scan By de um motorista de verdade (ver
+    eh_state_auto_em_rota), entao a EMPRESA que saiu com o pacote ja e
+    conhecida com confianca, sem depender de historico de dias
+    anteriores (que pode ter sido outra empresa numa tentativa
+    diferente - ver eh_classificacao_de_insucesso em historico_tbr.py).
+    Ideia do Samuel em 16/09/2026: se o robo rodar de manha (logo apos
+    os DAs coletarem as rotas, quando o Last Scan By ainda e o
+    motorista de verdade) e de novo no fechamento a tarde/noite, um TBR
+    que estava 'EM ROTA - DMNZ' de manha e virou 'Received' agora e um
+    RETORNO/insucesso de verdade da MESMA empresa que saiu com ele
+    HOJE - da pra classificar automatico, sem perguntar de novo."""
+    return (classificacao_anterior or "").strip().upper().startswith("EM ROTA")
+
+
+def extrai_empresa_de_em_rota(classificacao_em_rota):
+    """'EM ROTA - DMNZ' -> 'DMNZ' (texto depois do primeiro traco).
+    Fallback pro texto inteiro se nao vier no formato esperado (nao
+    deveria acontecer - 'EM ROTA - X' e sempre gerado por este mesmo
+    modulo, ver eh_state_auto_em_rota acima - mas nao trava o robo por
+    causa disso)."""
+    partes = classificacao_em_rota.split("-", 1)
+    return partes[1].strip() if len(partes) == 2 else classificacao_em_rota.strip()
+
+
 def processa(linhas_csv, base_tbr, base_das, data_hoje_str, tbrs_marcados_na=None):
     """Centraliza o processamento do State Finalizador pra todas as linhas
     do CSV de hoje. Nao decide nada sozinho sobre o que precisa de
@@ -190,6 +217,27 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str, tbrs_marcados_na=Non
     Devolve um dict:
       - entregues: linhas com State=Delivered (State Finalizador = "Entregue" automatico)
       - auto_em_rota: lista de dicts {tbr, resposta, last_scan_by, route_code} - EM ROTA automatico
+      - auto_retorno_insucesso: TBR que tinha uma classificacao salva
+        "EM ROTA - <empresa>" (de uma rodada anterior - pode ser de
+        hoje de manha, ou do ultimo fechamento salvo) e agora voltou
+        como "Received" - classifica automatico como "INSUCESSO -
+        <empresa>", reaproveitando a MESMA empresa que ja tinha sido
+        confirmada por Last Scan By de motorista de verdade (ver
+        eh_retorno_apos_em_rota). Ideia do Samuel em 16/09/2026: e
+        confiavel porque "EM ROTA - X" so fica salvo enquanto o pacote
+        continua com aquela MESMA empresa desde a ultima vez que o robo
+        rodou - assim que ele vira "Received", a proxima rodada ja
+        reclassifica (pra "INSUCESSO" ou outra coisa), entao nunca
+        sobra um "EM ROTA" salvo escondendo um ciclo inteiro de
+        ida-e-volta no meio (o problema que motivou
+        eh_classificacao_de_insucesso em historico_tbr.py so existe
+        DEPOIS que o pacote ja virou insucesso uma vez - aqui e a
+        primeira vez que ele volta). Rodar o robo de manha (logo apos
+        os DAs saírem com a rota) so aumenta quantos TBR's chegam no
+        fechamento ja com esse "EM ROTA" salvo, em vez de pularem
+        direto pra "Received" sem esse meio-de-caminho nunca ter sido
+        visto - nao e uma exigencia pra regra funcionar, so amplia
+        quantos casos ela cobre.
       - auto_cancelado: cancelado pelo cliente ANTES de ir pra rota (Operation=CANCELLED)
       - auto_outro_node: pacote de outro node (Reason=Wrong Node - sinal
         explícito da Amazon; ver eh_outro_node pra entender por que NÃO
@@ -238,6 +286,7 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str, tbrs_marcados_na=Non
     reabrir, conhecidos = decide_quem_precisa_reabrir(nao_entregues, base_tbr)
 
     auto_em_rota = []
+    auto_retorno_insucesso = []
     auto_cancelado = []
     auto_outro_node = []
     auto_na = []
@@ -252,7 +301,21 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str, tbrs_marcados_na=Non
         # (nenhuma das outras regras abaixo depende do texto do State em
         # si, so de Operation/Reason/Last Scan By - um State vazio nunca
         # bate com elas por acidente).
-        if eh_cancelado_antes_da_rota(r["operation"]):
+        anterior = base_tbr.get(r["tbr"])
+        if (
+            r["state_scc"].strip().lower() == "received"
+            and anterior
+            and eh_retorno_apos_em_rota(anterior["classificacao"])
+        ):
+            # Checado ANTES de cancelado/outro-node de proposito: um TBR
+            # que estava "EM ROTA" nao deveria bater com nenhuma dessas
+            # (elas sao pra pacote que nunca chegou a sair pra rota), mas
+            # se algum dia baterem por engano, essa classificacao
+            # automatica especifica (empresa ja confirmada por motorista
+            # de verdade) e mais confiavel que as outras.
+            empresa = extrai_empresa_de_em_rota(anterior["classificacao"])
+            auto_retorno_insucesso.append({**r, "resposta": f"INSUCESSO - {empresa}"})
+        elif eh_cancelado_antes_da_rota(r["operation"]):
             auto_cancelado.append({**r, "resposta": TEXTO_CANCELADO_ANTES_ROTA})
         elif eh_outro_node(r["reason"]):
             auto_outro_node.append({**r, "resposta": "PCT OUTRO NODE"})
@@ -292,6 +355,7 @@ def processa(linhas_csv, base_tbr, base_das, data_hoje_str, tbrs_marcados_na=Non
     return {
         "entregues": entregues,
         "auto_em_rota": auto_em_rota,
+        "auto_retorno_insucesso": auto_retorno_insucesso,
         "auto_cancelado": auto_cancelado,
         "auto_outro_node": auto_outro_node,
         "auto_na": auto_na,
