@@ -118,7 +118,7 @@ def vai_para(tela):
 # ------------------------------------------------------------------
 def tela_home():
     st.title("📦 Painel Operação DMNZ - AMXL")
-    st.caption("Fechamento DMNNZ")
+    st.caption("Fechamento LRN9")
 
     st.session_state.nome_usuario = st.text_input(
         "Seu nome",
@@ -619,6 +619,8 @@ def tela_etapa1():
                                     "(automático) · "
                                     f"**{len(resultado['auto_em_rota'])} em rota** "
                                     "(automático, DA de verdade vinculado) · "
+                                    f"**{len(resultado['auto_retorno_insucesso'])} retorno(s)** "
+                                    "(automático, era \"EM ROTA\" e voltou Received) · "
                                     f"**{len(resultado['auto_cancelado'])} cancelado(s)** "
                                     "(automático, antes da rota) · "
                                     f"**{len(resultado['auto_outro_node'])} outro node** "
@@ -675,6 +677,7 @@ def tela_etapa1():
                                     )
                                     automaticos_sem_pendentes = (
                                         resultado["auto_em_rota"]
+                                        + resultado["auto_retorno_insucesso"]
                                         + resultado["auto_cancelado"]
                                         + resultado["auto_outro_node"]
                                         + resultado["auto_na"]
@@ -892,6 +895,7 @@ def tela_etapa1():
                                     # o vislumbre completo antes de confirmar.
                                     automaticos = (
                                         resultado["auto_em_rota"]
+                                        + resultado["auto_retorno_insucesso"]
                                         + resultado["auto_cancelado"]
                                         + resultado["auto_outro_node"]
                                         + resultado["auto_na"]
@@ -1315,4 +1319,3 @@ elif st.session_state.tela == "fechamento_final":
     tela_fechamento_final()
 elif st.session_state.tela == "parceiros":
     tela_parceiros()
-
