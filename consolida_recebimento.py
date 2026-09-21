@@ -106,8 +106,10 @@ def consolida_recebimento(arquivo, nome_arquivo):
 
         paradas = {}  # endereco_base -> [tbr, ...], na ordem em que apareceram
         tbrs_da_rota = []  # todos os TBR da rota, na ordem do arquivo (pra cruzar com o CSV do SCC depois)
+        itens = []  # [{"stop":, "tbr":, "endereco":}], na ordem do arquivo - pra consulta TBR+endereco na tela
         pacotes = 0
         for row in linhas[2:]:  # pula linha 1 (metadados) e 2 (cabecalho)
+            stop = row[0] if len(row) > 0 else None
             tracking_id = row[1] if len(row) > 1 else None
             endereco = row[5] if len(row) > 5 else None
             if not tracking_id:
@@ -115,6 +117,7 @@ def consolida_recebimento(arquivo, nome_arquivo):
             tbr = str(tracking_id).strip()
             pacotes += 1
             tbrs_da_rota.append(tbr)
+            itens.append({"stop": stop, "tbr": tbr, "endereco": endereco or ""})
             chave = normaliza_endereco_base(endereco)
             paradas.setdefault(chave, []).append(tbr)
 
@@ -130,6 +133,7 @@ def consolida_recebimento(arquivo, nome_arquivo):
             "paradas": len(paradas),
             "detalhe_paradas": detalhe_paradas,
             "tbrs": tbrs_da_rota,
+            "itens": itens,
         }
 
     data_arquivo = detecta_data_do_arquivo(nome_arquivo, data_criacao_excel)
@@ -176,21 +180,36 @@ def categoriza_state_recebimento(state_texto):
     return "stowed_ou_alem"
 
 
-def cruza_com_state_scc(por_rota, linhas_csv):
+def cruza_com_state_scc(por_rota, linhas_csv, chave="situacao_real"):
     """linhas_csv: lista de dicts vinda de base_das.le_csv_scc, do MESMO
     CSV do SCC de sempre (so que exportado logo apos inducao/stow, com
     o State transitorio - ver comentario acima).
 
-    Acrescenta em cada rota de por_rota a chave 'situacao_real':
+    'chave': nome da chave onde guardar o resultado dentro de cada rota
+    - usado pra guardar a checagem da inducao ("situacao_inducao") e a
+    do stow ("situacao_stow") separadas, ja que sao dois momentos
+    diferentes do turno (ver PAINEL_RECEBIMENTO_WIZARD em app.py).
+
+    Acrescenta em cada rota de por_rota a chave pedida:
         {
             "manifested": [tbr, ...],       # ainda nao foi induzido
             "inducted": [tbr, ...],         # induzido, falta armazenar (stow)
             "stowed_ou_alem": [tbr, ...],   # ja armazenado (ou mais adiante)
             "sem_state": [tbr, ...],        # achou o TBR no CSV mas sem State
             "nao_encontrado": [tbr, ...],   # TBR do plano que nem apareceu no CSV
-            "confirmada": bool,             # True so se 100% dos TBR do plano
-                                             # estao em stowed_ou_alem
+            "confirmada": bool,             # ver nota abaixo
         }
+
+    Nota sobre 'confirmada' (ajuste depois de testar com dados reais em
+    21/09/2026): SO fica False por causa de manifested/inducted/sem_state
+    presos no meio do processo - "nao_encontrado" (planejado mas nunca
+    apareceu em NENHUM CSV) NAO trava a confirmacao. Motivo: nem todo
+    pacote do plano chega fisicamente na estacao todo santo dia (atraso
+    de caminhao, ficou em outra estacao etc) - isso e normal, nao e um
+    problema de processo, entao nao devia impedir a rota de ser marcada
+    como "concluida" pros que DE FATO chegaram. E exatamente por isso
+    que "nao_encontrado" fica separado (pra dar pra ver quem sumiu),
+    mas fora do calculo de 'confirmada'.
 
     Devolve o proprio por_rota (modificado in-place, alem de devolvido -
     fica explicito no retorno pra quem chama nao precisar adivinhar)."""
@@ -211,12 +230,46 @@ def cruza_com_state_scc(por_rota, linhas_csv):
             else:
                 situacao[categoriza_state_recebimento(estado_por_tbr[tbr])].append(tbr)
         situacao["confirmada"] = not (
-            situacao["manifested"] or situacao["inducted"]
-            or situacao["sem_state"] or situacao["nao_encontrado"]
+            situacao["manifested"] or situacao["inducted"] or situacao["sem_state"]
         )
-        info["situacao_real"] = situacao
+        info[chave] = situacao
 
     return por_rota
+
+
+def soma_inducidos_ou_alem(por_rota, chave="situacao_inducao"):
+    """Total (todas as rotas somadas) de TBR que ja passaram da etapa
+    Manifested - ou seja, ja estao Inducted ou mais adiante (Stowed,
+    etc). Usado pra comparar com o numero digitado a mao ("quantos
+    pacotes chegaram no manifesto de transporte") no checkpoint de
+    pos-inducao."""
+    total = 0
+    for info in por_rota.values():
+        sit = info.get(chave)
+        if sit:
+            total += len(sit["inducted"]) + len(sit["stowed_ou_alem"])
+    return total
+
+
+def soma_stowed_ou_alem(por_rota, chave="situacao_stow"):
+    """Total (todas as rotas somadas) de TBR que ja estao Stowed (ou
+    mais adiante). Usado no checkpoint de pos-stow, comparado contra o
+    total confirmado na inducao (ninguem deveria "sumir" entre um
+    checkpoint e outro)."""
+    total = 0
+    for info in por_rota.values():
+        sit = info.get(chave)
+        if sit:
+            total += len(sit["stowed_ou_alem"])
+    return total
+
+
+def _situacao_mais_recente(info):
+    """Pega o checkpoint mais avancado que essa rota ja tem: stow (mais
+    recente) > inducao > nenhum. Usado pra decidir o que mostrar no
+    Excel sem o chamador precisar saber em que checkpoint o usuario
+    parou."""
+    return info.get("situacao_stow") or info.get("situacao_inducao")
 
 
 def gera_workbook_recebimento(por_rota, node, data_arquivo):
@@ -224,11 +277,12 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo):
     total no fim) + aba 'Detalhe paradas' (so as paradas com mais de 1
     pacote, pra dar pra conferir na mao se o agrupamento fez sentido -
     ver o comentario grande no topo do arquivo sobre a regra usada e a
-    limitacao dela). Se alguma rota tiver 'situacao_real' (cruzou com o
-    CSV do SCC - ver cruza_com_state_scc), a aba Resumo ganha as
-    colunas extras e entra uma aba 'Pendentes' com o detalhe de quem
+    limitacao dela). Se alguma rota tiver checagem real (cruzou com o
+    CSV do SCC na inducao e/ou no stow - ver cruza_com_state_scc), a
+    aba Resumo ganha as colunas extras (do checkpoint mais avancado
+    disponivel) e entra uma aba 'Pendentes' com o detalhe de quem
     ainda nao chegou em Stowed."""
-    tem_situacao_real = any("situacao_real" in info for info in por_rota.values())
+    tem_situacao_real = any(_situacao_mais_recente(info) for info in por_rota.values())
 
     wb = openpyxl.Workbook()
 
@@ -251,7 +305,7 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo):
         info = por_rota[rota]
         linha = [rota, info["pacotes"], info["paradas"]]
         if tem_situacao_real:
-            sit = info.get("situacao_real")
+            sit = _situacao_mais_recente(info)
             if sit:
                 linha += [
                     len(sit["manifested"]), len(sit["inducted"]), len(sit["stowed_ou_alem"]),
@@ -287,7 +341,7 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo):
             "nao_encontrado": "Não encontrado no CSV do SCC",
         }
         for rota in sorted(por_rota):
-            sit = por_rota[rota].get("situacao_real")
+            sit = _situacao_mais_recente(por_rota[rota])
             if not sit:
                 continue
             for chave, rotulo in rotulos.items():
