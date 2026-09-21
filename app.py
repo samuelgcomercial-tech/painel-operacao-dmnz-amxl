@@ -26,6 +26,8 @@ from consolida_recebimento import (
     consolida_recebimento,
     cruza_com_state_scc,
     gera_workbook_recebimento,
+    soma_inducidos_ou_alem,
+    soma_stowed_ou_alem,
 )
 from base_das import (
     extrai_das_do_dia,
@@ -116,6 +118,10 @@ if "recebimento_resultado" not in st.session_state:
     st.session_state.recebimento_resultado = None
 if "recebimento_confirmado" not in st.session_state:
     st.session_state.recebimento_confirmado = False
+if "recebimento_qtd_chegou" not in st.session_state:
+    st.session_state.recebimento_qtd_chegou = 0
+if "recebimento_rota_selecionada" not in st.session_state:
+    st.session_state.recebimento_rota_selecionada = None
 
 
 def vai_para(tela):
@@ -1376,6 +1382,8 @@ def tela_recebimento():
         if st.button("🔁 Trocar arquivo de rotas"):
             st.session_state.recebimento_resultado = None
             st.session_state.recebimento_confirmado = False
+            st.session_state.recebimento_qtd_chegou = 0
+            st.session_state.recebimento_rota_selecionada = None
             st.rerun()
     else:
         arquivo_rotas = st.file_uploader(
@@ -1437,54 +1445,138 @@ def tela_recebimento():
                 hide_index=True,
             )
 
+    # ------------------------------------------------------------
+    # Checagem real, em 2 checkpoints (ajuste do Samuel em 21/09/2026,
+    # descrevendo o fluxo de verdade da operação): pós-indução e
+    # pós-stow. Cada checkpoint só aparece depois que o anterior "bate"
+    # — replica o processo real (não adianta olhar stow antes de bater
+    # a indução).
+    # ------------------------------------------------------------
     st.divider()
-    st.markdown("### Checagem real (opcional)")
+    st.markdown("### Checagem de recebimento (opcional)")
     st.caption(
-        "A tabela acima é o PLANO — só vira confiável de verdade quando os pacotes já "
-        "passaram por todo o fluxo físico (Manifested → Inducted → Stowed). Se você tiver "
-        "o CSV do SCC exportado nesse momento do turno (mesmo CSV de sempre, colando os TBR "
-        "da rota — só muda o State, que vem transitório), sobe aqui pra cruzar com o plano."
+        "A tabela acima é o PLANO — só vira confiável de verdade quando os pacotes que "
+        "chegaram já passaram pelo fluxo físico (Manifested → Inducted → Stowed)."
     )
-    csv_scc = st.file_uploader(
-        "CSV do SCC (Tracking ID + State) desse momento do turno",
-        type=["csv"],
-        key="upload_csv_recebimento",
-    )
-    if csv_scc is not None:
-        try:
-            linhas_csv = le_csv_scc(csv_scc)
-            cruza_com_state_scc(por_rota, linhas_csv)
-        except Exception as e:
-            st.error(f"Não consegui ler esse CSV: {e}")
 
-    tem_situacao_real = any("situacao_real" in info for info in por_rota.values())
-    if tem_situacao_real:
-        rotas_confirmadas = sum(1 for info in por_rota.values() if info["situacao_real"]["confirmada"])
-        st.markdown(f"**{rotas_confirmadas} de {len(por_rota)} rota(s)** já 100% Stowed (confirmada).")
+    st.session_state.recebimento_qtd_chegou = st.number_input(
+        "Quantos pacotes chegaram no manifesto de transporte hoje? (contagem física, turno inteiro)",
+        min_value=0,
+        step=1,
+        value=st.session_state.recebimento_qtd_chegou,
+    )
+    qtd_chegou = st.session_state.recebimento_qtd_chegou
+
+    inducao_ok = False
+    if qtd_chegou > 0:
+        st.markdown("**Checkpoint 1 — pós-indução**")
+        csv_inducao = st.file_uploader(
+            "CSV do SCC pós-indução (Tracking ID + State)", type=["csv"], key="upload_csv_inducao"
+        )
+        if csv_inducao is not None:
+            try:
+                cruza_com_state_scc(por_rota, le_csv_scc(csv_inducao), chave="situacao_inducao")
+            except Exception as e:
+                st.error(f"Não consegui ler esse CSV: {e}")
+
+        if any("situacao_inducao" in info for info in por_rota.values()):
+            total_inducao = soma_inducidos_ou_alem(por_rota)
+            diferenca = qtd_chegou - total_inducao
+            if diferenca == 0:
+                st.success(f"Bateu: {total_inducao} induzido(s) (ou além) = {qtd_chegou} que chegaram. Segue pro stow.")
+                inducao_ok = True
+            else:
+                st.warning(
+                    f"Não bateu ainda: {total_inducao} induzido(s) (ou além) vs {qtd_chegou} que "
+                    f"chegaram (faltam {diferenca}). Confere quem falta induzir, ou sobe o CSV de "
+                    "novo depois de corrigir."
+                )
+                with st.expander("Quem ainda está Manifested (falta induzir)"):
+                    for rota in sorted(por_rota):
+                        pendentes = por_rota[rota]["situacao_inducao"]["manifested"]
+                        if pendentes:
+                            st.markdown(f"**{rota}** ({len(pendentes)}): {', '.join(pendentes)}")
+
+    if inducao_ok:
+        st.markdown("**Checkpoint 2 — pós-stow**")
+        csv_stow = st.file_uploader(
+            "CSV do SCC pós-stow (Tracking ID + State)", type=["csv"], key="upload_csv_stow"
+        )
+        if csv_stow is not None:
+            try:
+                cruza_com_state_scc(por_rota, le_csv_scc(csv_stow), chave="situacao_stow")
+            except Exception as e:
+                st.error(f"Não consegui ler esse CSV: {e}")
+
+        if any("situacao_stow" in info for info in por_rota.values()):
+            total_stow = soma_stowed_ou_alem(por_rota)
+            diferenca = qtd_chegou - total_stow
+            if diferenca == 0:
+                st.success(f"Bateu: {total_stow} armazenado(s) (Stowed ou além) = {qtd_chegou} que chegaram.")
+            else:
+                st.warning(
+                    f"Não bateu ainda: {total_stow} armazenado(s) vs {qtd_chegou} que chegaram "
+                    f"(faltam {diferenca}). Confere quem falta fazer stow abaixo."
+                )
+                with st.expander("Quem ainda está Inducted (falta armazenar)"):
+                    for rota in sorted(por_rota):
+                        pendentes = por_rota[rota]["situacao_stow"]["inducted"]
+                        if pendentes:
+                            st.markdown(f"**{rota}** ({len(pendentes)}): {', '.join(pendentes)}")
+
+    # ------------------------------------------------------------
+    # Painel final por rota — cards clicáveis (pedido do Samuel em
+    # 21/09/2026): clicar mostra os TBR + endereço daquela rota, pra
+    # consultar direto da sala sem precisar abrir o arquivo de rotas
+    # original. Os endereços já ficam guardados em por_rota[rota]["itens"]
+    # desde a leitura do arquivo (ver consolida_recebimento.py).
+    # ------------------------------------------------------------
+    st.divider()
+    st.markdown(f"### Painel por rota — {node_texto} · {data_texto}")
+    tem_stow = any("situacao_stow" in info for info in por_rota.values())
+    if tem_stow:
+        rotas_confirmadas = sum(1 for info in por_rota.values() if info["situacao_stow"]["confirmada"])
+        st.caption(
+            f"{rotas_confirmadas} de {len(por_rota)} rota(s) confirmada(s) — 100% Stowed, "
+            "considerando só quem chegou (quem nunca apareceu no CSV não trava a confirmação, "
+            "só entra como 'não encontrado')."
+        )
+
+    rotas_ordenadas = sorted(por_rota)
+    colunas = st.columns(3)
+    for i, rota in enumerate(rotas_ordenadas):
+        info = por_rota[rota]
+        with colunas[i % 3]:
+            with st.container(border=True):
+                situacao_final = info.get("situacao_stow")
+                if situacao_final:
+                    st.markdown(f"**{'✅' if situacao_final['confirmada'] else '⏳'} {rota}**")
+                else:
+                    st.markdown(f"**{rota}**")
+                st.markdown(f"{info['pacotes']} pacotes · {info['paradas']} paradas")
+                if st.button("🔍 Ver TBRs / endereços", key=f"btn_ver_{rota}", use_container_width=True):
+                    st.session_state.recebimento_rota_selecionada = (
+                        None if st.session_state.recebimento_rota_selecionada == rota else rota
+                    )
+                    st.rerun()
+
+    rota_sel = st.session_state.recebimento_rota_selecionada
+    if rota_sel and rota_sel in por_rota:
+        st.markdown(f"#### {rota_sel} — TBRs e endereços")
         st.dataframe(
             [
-                {
-                    "Rota": rota,
-                    "Manifested": len(info["situacao_real"]["manifested"]),
-                    "Inducted": len(info["situacao_real"]["inducted"]),
-                    "Stowed ou além": len(info["situacao_real"]["stowed_ou_alem"]),
-                    "Não encontrado": len(info["situacao_real"]["nao_encontrado"]) + len(info["situacao_real"]["sem_state"]),
-                    "Confirmada?": "✅ Sim" if info["situacao_real"]["confirmada"] else "⏳ Não",
-                }
-                for rota, info in sorted(por_rota.items())
+                {"Parada": item["stop"], "TBR": item["tbr"], "Endereço": item["endereco"]}
+                for item in por_rota[rota_sel]["itens"]
             ],
             use_container_width=True,
             hide_index=True,
-        )
-        st.caption(
-            "O Excel final vai ganhar essas colunas na aba Resumo + uma aba \"Pendentes\" "
-            "listando TBR por TBR quem ainda não chegou em Stowed."
         )
 
     st.divider()
     st.caption(
         "Confere a prévia acima antes de gerar o arquivo — o Excel final vai ter "
-        "essa mesma tabela (aba Resumo) + o detalhe do agrupamento (aba Detalhe paradas)."
+        "essa mesma tabela (aba Resumo) + o detalhe do agrupamento (aba Detalhe paradas) "
+        "+ a checagem real, se algum checkpoint já foi feito."
     )
     if st.button("✅ Confirmar e gerar arquivo", type="primary"):
         st.session_state.recebimento_confirmado = True
