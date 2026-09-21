@@ -22,6 +22,11 @@ import hashlib
 import streamlit as st
 
 from consolida_rotas import consolida, detecta_node_do_nome, le_tbrs_colados
+from consolida_recebimento import (
+    consolida_recebimento,
+    cruza_com_state_scc,
+    gera_workbook_recebimento,
+)
 from base_das import (
     extrai_das_do_dia,
     gera_csv_base_das,
@@ -107,6 +112,10 @@ if "dados_fechamento" not in st.session_state:
     st.session_state.dados_fechamento = None
 if "export_fechamento_insumos" not in st.session_state:
     st.session_state.export_fechamento_insumos = None
+if "recebimento_resultado" not in st.session_state:
+    st.session_state.recebimento_resultado = None
+if "recebimento_confirmado" not in st.session_state:
+    st.session_state.recebimento_confirmado = False
 
 
 def vai_para(tela):
@@ -114,11 +123,46 @@ def vai_para(tela):
 
 
 # ------------------------------------------------------------------
-# TELA INICIAL
+# TELA INICIAL — escolha entre os dois painéis (Fechamento x
+# Recebimento). Cada um é independente: Recebimento nem pede nome (não
+# precisa, não salva nada com autoria), Fechamento continua exigindo
+# como sempre. Ajuste do Samuel em 21/09/2026 — antes o Recebimento
+# entrava como botão pequeno dentro do próprio painel de Fechamento;
+# agora os dois ficam lado a lado, no mesmo topo, no mesmo app/deploy.
 # ------------------------------------------------------------------
 def tela_home():
     st.title("📦 Painel Operação DMNZ - AMXL")
-    st.caption("Fechamento LRN9")
+    st.caption(f"{NODE_ATUAL} · Data: {dt.date.today().strftime('%d/%m/%Y')}")
+
+    st.divider()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("#### 🚚 Painel Fechamento")
+        st.caption("Rotas → lista pro SCC → CSV do SCC → dashboard de fechamento do dia.")
+        if st.button("Abrir Painel Fechamento", use_container_width=True, type="primary"):
+            vai_para("home_fechamento")
+            st.rerun()
+    with col2:
+        st.markdown("#### 📥 Painel Recebimento")
+        st.caption("Mesmo arquivo de rotas, mas pra ver pacotes e paradas por rota. Sem motorista.")
+        if st.button("Abrir Painel Recebimento", use_container_width=True, type="primary"):
+            vai_para("recebimento")
+            st.rerun()
+
+
+# ------------------------------------------------------------------
+# PAINEL FECHAMENTO — home de verdade do fluxo de fechamento (nome de
+# quem tá usando + os botões de ação). Era a tela_home() antiga.
+# ------------------------------------------------------------------
+def tela_home_fechamento():
+    col_voltar, col_titulo = st.columns([1, 3], vertical_alignment="center")
+    with col_voltar:
+        if st.button("← Voltar"):
+            vai_para("home")
+            st.rerun()
+    with col_titulo:
+        st.markdown("**Painel Fechamento**")
 
     st.session_state.nome_usuario = st.text_input(
         "Seu nome",
@@ -171,7 +215,7 @@ def tela_etapa1():
     col_voltar, col_titulo = st.columns([1, 3], vertical_alignment="center")
     with col_voltar:
         if st.button("← Voltar"):
-            vai_para("home")
+            vai_para("home_fechamento")
             st.rerun()
     with col_titulo:
         st.markdown(
@@ -1034,7 +1078,7 @@ def tela_previa_fechamento():
     col_voltar, col_titulo = st.columns([1, 3], vertical_alignment="center")
     with col_voltar:
         if st.button("← Voltar"):
-            vai_para("home")
+            vai_para("home_fechamento")
             st.rerun()
     # Data do ARQUIVO de rotas (Etapa 1), não a data de hoje - o
     # fechamento pode ser rodado num dia diferente do dia do arquivo (ex:
@@ -1215,7 +1259,7 @@ def tela_parceiros():
     col_voltar, col_titulo = st.columns([1, 3], vertical_alignment="center")
     with col_voltar:
         if st.button("← Voltar"):
-            vai_para("home")
+            vai_para("home_fechamento")
             st.rerun()
     with col_titulo:
         st.markdown(f"**Parceiros cadastrados — {NODE_ATUAL}**")
@@ -1307,10 +1351,162 @@ def tela_parceiros():
 
 
 # ------------------------------------------------------------------
+# PAINEL RECEBIMENTO - pacotes e paradas por rota, sem logica de
+# motorista (ver consolida_recebimento.py pra regra de "mesma parada")
+# ------------------------------------------------------------------
+def tela_recebimento():
+    col_voltar, col_titulo = st.columns([1, 3], vertical_alignment="center")
+    with col_voltar:
+        if st.button("← Voltar"):
+            vai_para("home")
+            st.rerun()
+    with col_titulo:
+        st.markdown("**Painel Recebimento**")
+
+    st.caption(
+        "Mesmo arquivo de rotas (planejado, dos indianos) — mas aqui a conta é "
+        "pacotes e paradas por rota, sem entrar em motorista. Parada = mesmo "
+        "endereço (rua + número); mais de uma entrega no mesmo prédio/condomínio, "
+        "mudando só o apartamento, conta como 1 parada só."
+    )
+
+    ja_tem_dados = st.session_state.recebimento_resultado is not None
+    if ja_tem_dados:
+        arquivo_rotas = None
+        if st.button("🔁 Trocar arquivo de rotas"):
+            st.session_state.recebimento_resultado = None
+            st.session_state.recebimento_confirmado = False
+            st.rerun()
+    else:
+        arquivo_rotas = st.file_uploader(
+            "Arquivo de rotas (dos indianos)", type=["xlsx", "xlsm", "xls"], key="upload_recebimento"
+        )
+
+    if arquivo_rotas is not None:
+        try:
+            por_rota, data_arquivo, node = consolida_recebimento(arquivo_rotas, arquivo_rotas.name)
+            st.session_state.recebimento_resultado = {
+                "por_rota": por_rota,
+                "data_arquivo": data_arquivo,
+                "node": node,
+            }
+            st.session_state.recebimento_confirmado = False
+        except ValueError as e:
+            st.error(str(e))
+            st.session_state.recebimento_resultado = None
+
+    if not st.session_state.recebimento_resultado:
+        return
+
+    resultado = st.session_state.recebimento_resultado
+    por_rota = resultado["por_rota"]
+    data_arquivo = resultado["data_arquivo"]
+    node = resultado["node"]
+
+    data_texto = data_arquivo.strftime("%d/%m/%Y") if data_arquivo else "não identificada"
+    node_texto = node or "não identificado"
+    if node and node != NODE_ATUAL:
+        st.warning(f"O arquivo parece ser do node **{node}**, não do {NODE_ATUAL}. Confere se é o arquivo certo.")
+
+    total_pacotes = sum(info["pacotes"] for info in por_rota.values())
+    total_paradas = sum(info["paradas"] for info in por_rota.values())
+
+    st.divider()
+    st.markdown(f"### Prévia — {node_texto} · {data_texto}")
+    st.markdown(
+        f"**{len(por_rota)} rota(s)** lida(s) · **{total_pacotes} pacote(s)** · **{total_paradas} parada(s)**"
+    )
+
+    st.dataframe(
+        [{"Rota": rota, "Pacotes": info["pacotes"], "Paradas": info["paradas"]}
+         for rota, info in sorted(por_rota.items())],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("Conferir agrupamento (paradas com mais de 1 pacote)"):
+        for rota in sorted(por_rota):
+            detalhe = por_rota[rota]["detalhe_paradas"]
+            if not detalhe:
+                continue
+            st.markdown(f"**{rota}**")
+            st.dataframe(
+                [{"Endereço": d["endereco_base"], "Qtd pacotes": d["qtd_pacotes"], "TBRs": ", ".join(d["tbrs"])}
+                 for d in detalhe],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    st.divider()
+    st.markdown("### Checagem real (opcional)")
+    st.caption(
+        "A tabela acima é o PLANO — só vira confiável de verdade quando os pacotes já "
+        "passaram por todo o fluxo físico (Manifested → Inducted → Stowed). Se você tiver "
+        "o CSV do SCC exportado nesse momento do turno (mesmo CSV de sempre, colando os TBR "
+        "da rota — só muda o State, que vem transitório), sobe aqui pra cruzar com o plano."
+    )
+    csv_scc = st.file_uploader(
+        "CSV do SCC (Tracking ID + State) desse momento do turno",
+        type=["csv"],
+        key="upload_csv_recebimento",
+    )
+    if csv_scc is not None:
+        try:
+            linhas_csv = le_csv_scc(csv_scc)
+            cruza_com_state_scc(por_rota, linhas_csv)
+        except Exception as e:
+            st.error(f"Não consegui ler esse CSV: {e}")
+
+    tem_situacao_real = any("situacao_real" in info for info in por_rota.values())
+    if tem_situacao_real:
+        rotas_confirmadas = sum(1 for info in por_rota.values() if info["situacao_real"]["confirmada"])
+        st.markdown(f"**{rotas_confirmadas} de {len(por_rota)} rota(s)** já 100% Stowed (confirmada).")
+        st.dataframe(
+            [
+                {
+                    "Rota": rota,
+                    "Manifested": len(info["situacao_real"]["manifested"]),
+                    "Inducted": len(info["situacao_real"]["inducted"]),
+                    "Stowed ou além": len(info["situacao_real"]["stowed_ou_alem"]),
+                    "Não encontrado": len(info["situacao_real"]["nao_encontrado"]) + len(info["situacao_real"]["sem_state"]),
+                    "Confirmada?": "✅ Sim" if info["situacao_real"]["confirmada"] else "⏳ Não",
+                }
+                for rota, info in sorted(por_rota.items())
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(
+            "O Excel final vai ganhar essas colunas na aba Resumo + uma aba \"Pendentes\" "
+            "listando TBR por TBR quem ainda não chegou em Stowed."
+        )
+
+    st.divider()
+    st.caption(
+        "Confere a prévia acima antes de gerar o arquivo — o Excel final vai ter "
+        "essa mesma tabela (aba Resumo) + o detalhe do agrupamento (aba Detalhe paradas)."
+    )
+    if st.button("✅ Confirmar e gerar arquivo", type="primary"):
+        st.session_state.recebimento_confirmado = True
+
+    if st.session_state.recebimento_confirmado:
+        excel_bytes = gera_workbook_recebimento(por_rota, node_texto, data_arquivo)
+        nome_arquivo = f"painel_recebimento_{node_texto}_{data_arquivo.strftime('%Y%m%d') if data_arquivo else 'sem_data'}.xlsx"
+        st.download_button(
+            "⬇️ Baixar Excel",
+            data=excel_bytes,
+            file_name=nome_arquivo,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+
+# ------------------------------------------------------------------
 # ROTEADOR
 # ------------------------------------------------------------------
 if st.session_state.tela == "home":
     tela_home()
+elif st.session_state.tela == "home_fechamento":
+    tela_home_fechamento()
 elif st.session_state.tela == "etapa1":
     tela_etapa1()
 elif st.session_state.tela == "previa_fechamento":
@@ -1319,3 +1515,5 @@ elif st.session_state.tela == "fechamento_final":
     tela_fechamento_final()
 elif st.session_state.tela == "parceiros":
     tela_parceiros()
+elif st.session_state.tela == "recebimento":
+    tela_recebimento()
