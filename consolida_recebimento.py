@@ -62,7 +62,9 @@ import re
 import unicodedata
 
 import openpyxl
-from openpyxl.styles import Font, PatternFill
+from openpyxl.drawing.image import Image as ExcelImage
+from openpyxl.styles import Alignment, Font, PatternFill
+from PIL import Image as PILImage
 
 from consolida_rotas import _carrega_planilha, detecta_data_do_arquivo, detecta_node_do_nome
 
@@ -264,6 +266,32 @@ def soma_stowed_ou_alem(por_rota, chave="situacao_stow"):
     return total
 
 
+# --- Ressalva do líder (ajuste do Samuel em 21/09/2026) --------------
+#
+# Quando o Inducted vem MENOR que o Manifested (o numero digitado a
+# mao, vindo do Bill of Lading/manifesto de transporte de verdade - o
+# Samuel mandou foto de um), isso pode ser um erro de processo (faltou
+# induzir alguem) OU pode ser que o fisico realmente veio a menos do
+# que o proprio manifesto da Amazon diz (acontece: o caminhao chegou
+# com menos pacote do que o documento afirma). Nesse segundo caso NAO
+# FAZ SENTIDO travar o fluxo esperando um numero que nunca vai bater -
+# o lider reconfere pacote a pacote e, se continuar diferente, registra
+# uma RESSALVA (texto explicando + opcionalmente uma foto do proprio
+# Manifested) pra seguir mesmo assim, em vez de ficar preso.
+def monta_texto_ressalva_padrao(node, manifested, fisico):
+    """Texto padrao da ressalva, ja preenchido com os numeros - o
+    lider pode editar antes de confirmar (ver tela_recebimento em
+    app.py)."""
+    return (
+        f"A quantidade de pacotes manifestada para o {node} veio a menos que o "
+        "informado. Foi feita uma nova indução pacote a pacote para validar o físico "
+        "x sistema e, ainda assim, o número se manteve. Segue a quantidade do "
+        "Manifested e a que veio físico:\n\n"
+        f"{manifested} Manifested\n"
+        f"{fisico} físico"
+    )
+
+
 def _situacao_mais_recente(info):
     """Pega o checkpoint mais avancado que essa rota ja tem: stow (mais
     recente) > inducao > nenhum. Usado pra decidir o que mostrar no
@@ -272,7 +300,7 @@ def _situacao_mais_recente(info):
     return info.get("situacao_stow") or info.get("situacao_inducao")
 
 
-def gera_workbook_recebimento(por_rota, node, data_arquivo):
+def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None):
     """Monta o Excel final: aba 'Resumo' (pacotes/paradas por rota, com
     total no fim) + aba 'Detalhe paradas' (so as paradas com mais de 1
     pacote, pra dar pra conferir na mao se o agrupamento fez sentido -
@@ -281,7 +309,12 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo):
     CSV do SCC na inducao e/ou no stow - ver cruza_com_state_scc), a
     aba Resumo ganha as colunas extras (do checkpoint mais avancado
     disponivel) e entra uma aba 'Pendentes' com o detalhe de quem
-    ainda nao chegou em Stowed."""
+    ainda nao chegou em Stowed.
+
+    ressalvas: lista opcional de dicts {"checkpoint": str, "texto": str,
+    "foto_nome": str|None, "foto_bytes": bytes|None} - vira uma aba
+    'Ressalvas' com o texto e a foto do Manifested embutida (quando
+    tiver), pra registro/auditoria (ver monta_texto_ressalva_padrao)."""
     tem_situacao_real = any(_situacao_mais_recente(info) for info in por_rota.values())
 
     wb = openpyxl.Workbook()
@@ -363,6 +396,34 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo):
     ws2.column_dimensions["B"].width = 42
     ws2.column_dimensions["C"].width = 12
     ws2.column_dimensions["D"].width = 60
+
+    if ressalvas:
+        ws_res = wb.create_sheet("Ressalvas")
+        linha_atual = 1
+        for r in ressalvas:
+            cel = ws_res.cell(row=linha_atual, column=1, value=f"Checkpoint: {r['checkpoint']}")
+            cel.font = Font(bold=True)
+            linha_atual += 1
+            ws_res.cell(row=linha_atual, column=1, value=r["texto"])
+            ws_res.cell(row=linha_atual, column=1).alignment = Alignment(wrap_text=True, vertical="top")
+            ws_res.merge_cells(start_row=linha_atual, start_column=1, end_row=linha_atual, end_column=6)
+            ws_res.row_dimensions[linha_atual].height = 90
+            linha_atual += 2
+            if r.get("foto_bytes"):
+                try:
+                    img_pil = PILImage.open(io.BytesIO(r["foto_bytes"]))
+                    img_pil.thumbnail((500, 700))
+                    img_buffer = io.BytesIO()
+                    img_pil.convert("RGB").save(img_buffer, format="PNG")
+                    img_buffer.seek(0)
+                    img_excel = ExcelImage(img_buffer)
+                    ws_res.add_image(img_excel, f"A{linha_atual}")
+                    linha_atual += int(img_pil.height / 18) + 3
+                except Exception:
+                    ws_res.cell(row=linha_atual, column=1, value=f"(não consegui anexar a foto {r.get('foto_nome', '')})")
+                    linha_atual += 2
+            linha_atual += 2
+        ws_res.column_dimensions["A"].width = 70
 
     buffer = io.BytesIO()
     wb.save(buffer)
