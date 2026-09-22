@@ -23,10 +23,12 @@ import streamlit as st
 
 from consolida_rotas import consolida, detecta_node_do_nome, le_tbrs_colados
 from consolida_recebimento import (
+    LIMITE_ALERTA_PCT_DELIVERED,
     consolida_recebimento,
     cruza_com_state_scc,
     gera_workbook_recebimento,
     monta_texto_ressalva_padrao,
+    percentual_delivered,
     soma_inducidos_ou_alem,
     soma_stowed_ou_alem,
 )
@@ -1369,6 +1371,21 @@ def tela_parceiros():
 # PAINEL RECEBIMENTO - pacotes e paradas por rota, sem logica de
 # motorista (ver consolida_recebimento.py pra regra de "mesma parada")
 # ------------------------------------------------------------------
+def _avisa_se_parece_csv_fechamento(por_rota, linhas_csv):
+    """Mostra um st.warning se o CSV que acabou de subir num checkpoint
+    de recebimento tiver um percentual alto de Delivered - sinal de que
+    é, na verdade, um CSV de FIM DE TURNO (fechamento), não um
+    checkpoint de verdade (ver percentual_delivered em
+    consolida_recebimento.py). Só avisa, não trava nada."""
+    pct_delivered, qtd_encontrada = percentual_delivered(por_rota, linhas_csv)
+    if qtd_encontrada and pct_delivered >= LIMITE_ALERTA_PCT_DELIVERED:
+        st.warning(
+            f"⚠️ {pct_delivered:.0f}% dos pacotes do plano que aparecem nesse CSV já estão "
+            "como **Delivered** — isso é sinal de que esse arquivo pode ser um CSV de "
+            "**fechamento operacional (fim de turno)**, não um checkpoint de recebimento de "
+            "verdade. No ato do recebimento ainda não dá pra ter pacote entregue (a entrega só "
+            "acontece bem depois, já em rota). Confere se subiu o CSV certo antes de continuar."
+        )
 def tela_recebimento():
     col_voltar, col_titulo = st.columns([1, 3], vertical_alignment="center")
     with col_voltar:
@@ -1529,9 +1546,12 @@ def tela_recebimento():
         )
         if csv_inducao is not None:
             try:
-                cruza_com_state_scc(por_rota, le_csv_scc(csv_inducao), chave="situacao_inducao")
+                linhas_csv_inducao = le_csv_scc(csv_inducao)
             except Exception as e:
                 st.error(f"Não consegui ler esse CSV: {e}")
+            else:
+                _avisa_se_parece_csv_fechamento(por_rota, linhas_csv_inducao)
+                cruza_com_state_scc(por_rota, linhas_csv_inducao, chave="situacao_inducao")
 
         if any("situacao_inducao" in info for info in por_rota.values()):
             total_inducao = soma_inducidos_ou_alem(por_rota)
@@ -1602,9 +1622,12 @@ def tela_recebimento():
         )
         if csv_stow is not None:
             try:
-                cruza_com_state_scc(por_rota, le_csv_scc(csv_stow), chave="situacao_stow")
+                linhas_csv_stow = le_csv_scc(csv_stow)
             except Exception as e:
                 st.error(f"Não consegui ler esse CSV: {e}")
+            else:
+                _avisa_se_parece_csv_fechamento(por_rota, linhas_csv_stow)
+                cruza_com_state_scc(por_rota, linhas_csv_stow, chave="situacao_stow")
 
         if any("situacao_stow" in info for info in por_rota.values()):
             total_stow = soma_stowed_ou_alem(por_rota)
@@ -1763,4 +1786,3 @@ elif st.session_state.tela == "parceiros":
     tela_parceiros()
 elif st.session_state.tela == "recebimento":
     tela_recebimento()
-
