@@ -1658,6 +1658,51 @@ def tela_recebimento():
 
 
 # ------------------------------------------------------------------
+# LOGIN — pedido do Samuel em 22/09/2026: o link do app no Streamlit
+# Cloud vai ficar aberto pra qualquer um (sem exigir conta
+# Google/Streamlit, que é o que a opção "Only specific people" do
+# próprio Streamlit Cloud exige), mas só quem souber usuário+senha
+# consegue de fato ENTRAR e ver/mexer em alguma coisa - as credenciais
+# NUNCA ficam no código (mesma regra do token do GitHub em
+# github_store.py): moram nos secrets do Streamlit Cloud, seção
+# [auth], configurada em "Manage app" -> "Settings" -> "Secrets":
+#
+#     [auth]
+#     usuario = "escolha o que quiser aqui"
+#     senha = "escolha uma senha forte aqui"
+#
+# Isso é so uma comparacao simples (nao tem "esqueci minha senha",
+# nao tem varios usuarios, nao tem limite de tentativas) - de proposito,
+# pra ficar simples de configurar e entender. Da pra evoluir depois se
+# precisar de mais de uma pessoa com login proprio.
+# ------------------------------------------------------------------
+if "autenticado" not in st.session_state:
+    st.session_state.autenticado = False
+
+if not st.session_state.autenticado:
+    st.title("📦 Painel Operação DMNZ - AMXL")
+    st.caption("Acesso restrito — entra com usuário e senha.")
+    usuario_digitado = st.text_input("Usuário")
+    senha_digitada = st.text_input("Senha", type="password")
+    if st.button("Entrar", type="primary"):
+        try:
+            usuario_certo = st.secrets["auth"]["usuario"]
+            senha_certa = st.secrets["auth"]["senha"]
+        except Exception:
+            st.error(
+                "Login ainda não configurado — falta o secret [auth] "
+                "(usuario/senha) em Settings → Secrets no Streamlit Cloud."
+            )
+        else:
+            if usuario_digitado == usuario_certo and senha_digitada == senha_certa:
+                st.session_state.autenticado = True
+                st.rerun()
+            else:
+                st.error("Usuário ou senha incorretos.")
+    st.stop()
+
+
+# ------------------------------------------------------------------
 # ROTEADOR
 # ------------------------------------------------------------------
 if st.session_state.tela == "home":
@@ -1674,4 +1719,3 @@ elif st.session_state.tela == "parceiros":
     tela_parceiros()
 elif st.session_state.tela == "recebimento":
     tela_recebimento()
-
