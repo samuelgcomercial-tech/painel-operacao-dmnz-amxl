@@ -239,6 +239,46 @@ def cruza_com_state_scc(por_rota, linhas_csv, chave="situacao_real"):
     return por_rota
 
 
+# Limiar (%) acima do qual avisamos que o CSV subido num checkpoint
+# pode ser, na verdade, um export de FIM DE TURNO (o mesmo tipo que
+# alimenta o Fechamento) em vez de um checkpoint de recebimento de
+# verdade - ver percentual_delivered() logo abaixo. Um valor baixo
+# (poucos % de Delivered) pode acontecer de verdade se o checkpoint
+# foi capturado um pouco atrasado; um valor alto e outra historia.
+LIMITE_ALERTA_PCT_DELIVERED = 10
+
+
+def percentual_delivered(por_rota, linhas_csv):
+    """Calcula, entre os TBRs do PLANO (por_rota) que aparecem nesse CSV,
+    qual percentual ja esta literalmente em 'Delivered'.
+
+    Serve de sinal de alerta pro checkpoint de recebimento (pedido do
+    Samuel em 22/09/2026, depois de testar com um CSV errado por
+    engano): fisicamente NAO da pra ter pacote Delivered no ato do
+    recebimento - a entrega so acontece horas depois, depois que a rota
+    inteira (inducao -> stow -> saida) ja aconteceu. Entao se um
+    percentual alto do CSV ja vem Delivered, o mais provavel e que esse
+    arquivo seja um export de FIM DE TURNO (o mesmo tipo que ja
+    alimenta o Fechamento), nao um checkpoint de verdade - so um aviso,
+    nao trava nada (o usuario pode ter capturado o checkpoint atrasado
+    de proposito, ou so estar testando).
+
+    Devolve (percentual: float de 0 a 100, total_encontrados: int). Se
+    nao achar nenhum TBR do plano nesse CSV, devolve (0.0, 0) - sem
+    risco de divisao por zero."""
+    tbrs_do_plano = {tbr for info in por_rota.values() for tbr in info["tbrs"]}
+    estado_por_tbr = {}
+    for linha in linhas_csv:
+        tbr = (linha.get("Tracking ID") or "").strip()
+        if tbr:
+            estado_por_tbr[tbr] = linha.get("State")
+    encontrados = [estado_por_tbr[tbr] for tbr in tbrs_do_plano if tbr in estado_por_tbr]
+    if not encontrados:
+        return 0.0, 0
+    delivered = sum(1 for s in encontrados if (s or "").strip().lower() == "delivered")
+    return (delivered / len(encontrados)) * 100, len(encontrados)
+
+
 def soma_inducidos_ou_alem(por_rota, chave="situacao_inducao"):
     """Total (todas as rotas somadas) de TBR que ja passaram da etapa
     Manifested - ou seja, ja estao Inducted ou mais adiante (Stowed,
