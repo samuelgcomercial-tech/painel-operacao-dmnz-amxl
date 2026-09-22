@@ -129,6 +129,8 @@ if "recebimento_ressalva_inducao_confirmada" not in st.session_state:
     st.session_state.recebimento_ressalva_inducao_confirmada = False
 if "recebimento_ressalva_inducao_foto" not in st.session_state:
     st.session_state.recebimento_ressalva_inducao_foto = None
+if "recebimento_tem_na" not in st.session_state:
+    st.session_state.recebimento_tem_na = False
 
 
 def vai_para(tela):
@@ -1394,6 +1396,7 @@ def tela_recebimento():
             st.session_state.recebimento_ressalva_inducao_texto = ""
             st.session_state.recebimento_ressalva_inducao_confirmada = False
             st.session_state.recebimento_ressalva_inducao_foto = None
+            st.session_state.recebimento_tem_na = False
             st.rerun()
     else:
         arquivo_rotas = st.file_uploader(
@@ -1426,21 +1429,13 @@ def tela_recebimento():
     if node and node != NODE_ATUAL:
         st.warning(f"O arquivo parece ser do node **{node}**, não do {NODE_ATUAL}. Confere se é o arquivo certo.")
 
-    total_pacotes = sum(info["pacotes"] for info in por_rota.values())
-    total_paradas = sum(info["paradas"] for info in por_rota.values())
-
+    # Removido de propósito (pedido do Samuel em 22/09/2026): tinha uma
+    # tabela "Prévia" aqui (rota x pacotes x paradas) logo depois do
+    # upload, mas isso já aparece nos cards do painel final por rota, lá
+    # embaixo — era redundante e poluía a tela. Fica só o aviso de
+    # node errado (não duplicado em lugar nenhum) e o expander de
+    # conferência de agrupamento.
     st.divider()
-    st.markdown(f"### Prévia — {node_texto} · {data_texto}")
-    st.markdown(
-        f"**{len(por_rota)} rota(s)** lida(s) · **{total_pacotes} pacote(s)** · **{total_paradas} parada(s)**"
-    )
-
-    st.dataframe(
-        [{"Rota": rota, "Pacotes": info["pacotes"], "Paradas": info["paradas"]}
-         for rota, info in sorted(por_rota.items())],
-        use_container_width=True,
-        hide_index=True,
-    )
 
     with st.expander("Conferir agrupamento (paradas com mais de 1 pacote)"):
         for rota in sorted(por_rota):
@@ -1454,6 +1449,55 @@ def tela_recebimento():
                 use_container_width=True,
                 hide_index=True,
             )
+
+    # ------------------------------------------------------------
+    # Lista unificada de TBRs (mesma ideia da Etapa 1 do Fechamento):
+    # todas as rotas juntas num quadro só, com ícone de copiar, pra
+    # colar direto na pesquisa do SCC - inclusive TBRs de NA, que não
+    # vêm no arquivo de rotas (não foram atribuídos pela equipe da
+    # noite, a Amazon manda a rota direto). Por enquanto essa lista é
+    # só pra pesquisa/cópia - os TBRs de NA NÃO entram na conta dos
+    # checkpoints abaixo (quantos chegaram x quantos induziram/stowed),
+    # porque não têm rota nem "pacotes esperados" vindos do arquivo de
+    # rotas pra comparar contra.
+    # ------------------------------------------------------------
+    st.divider()
+    st.markdown("### Lista de TBRs (para pesquisar no SCC)")
+
+    tbrs_todas_rotas = [tbr for info in por_rota.values() for tbr in info["tbrs"]]
+
+    col_na, col_lista = st.columns([1, 1], gap="small")
+    with col_na:
+        with st.container(border=True):
+            rotulo_botao_na = (
+                "✅ Tem TBRs de NA (toque para desmarcar)"
+                if st.session_state.recebimento_tem_na
+                else "☐ Tem TBRs de NA para consulta no SCC? (opcional — toque para marcar)"
+            )
+            if st.button(rotulo_botao_na, key="botao_recebimento_tem_na", use_container_width=True):
+                st.session_state.recebimento_tem_na = not st.session_state.recebimento_tem_na
+                st.rerun()
+            if st.session_state.recebimento_tem_na:
+                st.text_area(
+                    "Cole os TBRs de NA aqui, um por linha",
+                    key="recebimento_texto_na",
+                    height=80,
+                    label_visibility="collapsed",
+                )
+
+    tbrs_na = (
+        le_tbrs_colados(st.session_state.get("recebimento_texto_na", ""))
+        if st.session_state.recebimento_tem_na
+        else []
+    )
+    lista_final_tbrs = tbrs_todas_rotas + tbrs_na
+    legenda_na = f" ({len(tbrs_todas_rotas)} + {len(tbrs_na)} de NA)" if tbrs_na else ""
+
+    with col_lista:
+        with st.container(border=True):
+            st.markdown(f"**Lista de TBRs — {len(lista_final_tbrs)} TBR(s){legenda_na}**")
+            st.caption("Ícone de copiar no canto do quadro pega a lista inteira de uma vez.")
+            st.code("\n".join(lista_final_tbrs), language=None, height=150)
 
     # ------------------------------------------------------------
     # Checagem real, em 2 checkpoints (ajuste do Samuel em 21/09/2026,
@@ -1719,3 +1763,4 @@ elif st.session_state.tela == "parceiros":
     tela_parceiros()
 elif st.session_state.tela == "recebimento":
     tela_recebimento()
+
