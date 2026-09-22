@@ -26,6 +26,7 @@ from consolida_recebimento import (
     consolida_recebimento,
     cruza_com_state_scc,
     gera_workbook_recebimento,
+    monta_texto_ressalva_padrao,
     soma_inducidos_ou_alem,
     soma_stowed_ou_alem,
 )
@@ -122,6 +123,12 @@ if "recebimento_qtd_chegou" not in st.session_state:
     st.session_state.recebimento_qtd_chegou = 0
 if "recebimento_rota_selecionada" not in st.session_state:
     st.session_state.recebimento_rota_selecionada = None
+if "recebimento_ressalva_inducao_texto" not in st.session_state:
+    st.session_state.recebimento_ressalva_inducao_texto = ""
+if "recebimento_ressalva_inducao_confirmada" not in st.session_state:
+    st.session_state.recebimento_ressalva_inducao_confirmada = False
+if "recebimento_ressalva_inducao_foto" not in st.session_state:
+    st.session_state.recebimento_ressalva_inducao_foto = None
 
 
 def vai_para(tela):
@@ -1384,6 +1391,9 @@ def tela_recebimento():
             st.session_state.recebimento_confirmado = False
             st.session_state.recebimento_qtd_chegou = 0
             st.session_state.recebimento_rota_selecionada = None
+            st.session_state.recebimento_ressalva_inducao_texto = ""
+            st.session_state.recebimento_ressalva_inducao_confirmada = False
+            st.session_state.recebimento_ressalva_inducao_foto = None
             st.rerun()
     else:
         arquivo_rotas = st.file_uploader(
@@ -1497,6 +1507,50 @@ def tela_recebimento():
                         if pendentes:
                             st.markdown(f"**{rota}** ({len(pendentes)}): {', '.join(pendentes)}")
 
+                # Ressalva do líder (ajuste do Samuel em 21/09/2026): se
+                # depois de reconferir o físico o número continuar
+                # diferente do Manifested, isso pode não ser erro de
+                # processo — pode ser que o físico mesmo veio a menos do
+                # que o manifesto (Bill of Lading) diz. Não trava
+                # esperando um número que pode nunca bater — o líder
+                # registra a ressalva (texto + foto opcional do
+                # Manifested) e segue mesmo assim.
+                if st.session_state.recebimento_ressalva_inducao_confirmada:
+                    st.info("📋 Ressalva registrada — seguindo pro stow mesmo com a diferença.")
+                    with st.expander("Ver ressalva registrada"):
+                        st.text(st.session_state.recebimento_ressalva_inducao_texto)
+                    if st.button("✏️ Editar ressalva"):
+                        st.session_state.recebimento_ressalva_inducao_confirmada = False
+                        st.rerun()
+                    inducao_ok = True
+                else:
+                    with st.expander("📋 Registrar ressalva (se o físico realmente veio a menos)"):
+                        st.caption(
+                            "Se depois de reconferir pacote a pacote o número continuar diferente "
+                            "do Manifested (não é erro de processo, é isso mesmo), registra abaixo "
+                            "pra liberar o próximo passo sem ficar preso esperando bater."
+                        )
+                        texto_padrao = monta_texto_ressalva_padrao(node_texto, qtd_chegou, total_inducao)
+                        texto_ressalva = st.text_area(
+                            "Texto da ressalva",
+                            value=st.session_state.recebimento_ressalva_inducao_texto or texto_padrao,
+                            height=180,
+                            key="texto_area_ressalva_inducao",
+                        )
+                        foto_manifested = st.file_uploader(
+                            "Foto do Manifested (Bill of Lading) — opcional",
+                            type=["jpg", "jpeg", "png", "pdf"],
+                            key="upload_foto_manifested",
+                        )
+                        if st.button("✅ Confirmar ressalva e seguir mesmo assim"):
+                            st.session_state.recebimento_ressalva_inducao_texto = texto_ressalva
+                            st.session_state.recebimento_ressalva_inducao_confirmada = True
+                            if foto_manifested is not None:
+                                st.session_state.recebimento_ressalva_inducao_foto = (
+                                    foto_manifested.name, foto_manifested.getvalue()
+                                )
+                            st.rerun()
+
     if inducao_ok:
         st.markdown("**Checkpoint 2 — pós-stow**")
         csv_stow = st.file_uploader(
@@ -1572,17 +1626,28 @@ def tela_recebimento():
             hide_index=True,
         )
 
+    ressalvas = []
+    if st.session_state.recebimento_ressalva_inducao_confirmada:
+        foto_nome, foto_bytes = st.session_state.recebimento_ressalva_inducao_foto or (None, None)
+        ressalvas.append({
+            "checkpoint": "Pós-indução",
+            "texto": st.session_state.recebimento_ressalva_inducao_texto,
+            "foto_nome": foto_nome,
+            "foto_bytes": foto_bytes,
+        })
+
     st.divider()
     st.caption(
         "Confere a prévia acima antes de gerar o arquivo — o Excel final vai ter "
         "essa mesma tabela (aba Resumo) + o detalhe do agrupamento (aba Detalhe paradas) "
-        "+ a checagem real, se algum checkpoint já foi feito."
+        "+ a checagem real, se algum checkpoint já foi feito"
+        + (" + a ressalva registrada (com a foto, se tiver)." if ressalvas else ".")
     )
     if st.button("✅ Confirmar e gerar arquivo", type="primary"):
         st.session_state.recebimento_confirmado = True
 
     if st.session_state.recebimento_confirmado:
-        excel_bytes = gera_workbook_recebimento(por_rota, node_texto, data_arquivo)
+        excel_bytes = gera_workbook_recebimento(por_rota, node_texto, data_arquivo, ressalvas=ressalvas)
         nome_arquivo = f"painel_recebimento_{node_texto}_{data_arquivo.strftime('%Y%m%d') if data_arquivo else 'sem_data'}.xlsx"
         st.download_button(
             "⬇️ Baixar Excel",
@@ -1609,3 +1674,4 @@ elif st.session_state.tela == "parceiros":
     tela_parceiros()
 elif st.session_state.tela == "recebimento":
     tela_recebimento()
+
