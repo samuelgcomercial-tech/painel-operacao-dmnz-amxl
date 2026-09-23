@@ -75,11 +75,93 @@ def _detecta_delimitador(texto_amostra):
     return ";" if texto_amostra.count(";") > texto_amostra.count(",") else ","
 
 
+def _eh_arquivo_excel(bytes_arquivo):
+    """Detecta se os bytes sao um arquivo Excel (.xlsx/.xls novo, base
+    ZIP) pela ASSINATURA BINARIA, nao pelo nome do arquivo - o usuario
+    pode chamar de '.csv' um arquivo que na verdade e um Excel (ou o
+    contrario), entao confiar so na extensao arrisca ler errado."""
+    return bytes_arquivo[:4] == b"PK\x03\x04"
+
+
+def _le_scc_de_excel(bytes_arquivo):
+    """Le um CSV do SCC que foi salvo como .xlsx em vez de .csv - visto
+    de verdade em 23/09/2026 (time noturno abriu o CSV exportado do SCC
+    no Excel com separador de lista regional diferente de virgula, o
+    Excel nao separou as colunas, e salvaram assim mesmo). Cobre os
+    dois formatos possiveis:
+
+      - tabela normal (cabecalho na linha 1, uma coluna por campo) -
+        caso alguem exporte/salve certinho no futuro.
+      - "CSV disfarcado de xlsx" (o caso real visto): cada linha
+        inteira do CSV original virou UM texto so dentro da coluna A,
+        aspas e virgulas do CSV original preservadas dentro do texto -
+        remonta o texto original e reusa o parser de CSV de sempre.
+
+    Nos dois casos devolve a mesma lista de dicts que le_csv_scc."""
+    import openpyxl
+
+    wb = openpyxl.load_workbook(io.BytesIO(bytes_arquivo), read_only=True, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    linhas = list(ws.iter_rows(values_only=True))
+    if not linhas:
+        return []
+
+    cabecalho = linhas[0]
+    colunas_preenchidas = sum(1 for c in cabecalho if c not in (None, ""))
+    if colunas_preenchidas > 1:
+        nomes = [str(c or "").strip() for c in cabecalho]
+        return [
+            {nomes[i]: row[i] for i in range(len(nomes)) if i < len(row)}
+            for row in linhas[1:]
+        ]
+
+    texto_csv = "\n".join(str(row[0]) for row in linhas if row and row[0] is not None)
+    delimitador = _detecta_delimitador(texto_csv[:2000])
+    reader = csv.DictReader(io.StringIO(texto_csv), delimiter=delimitador)
+    return list(reader)
+
+
+def _decodifica_texto_csv(bytes_arquivo):
+    """Decodifica os bytes do CSV pra texto, tolerando encoding diferente
+    de UTF-8 - visto de verdade em 24/09/2026 (Samuel exportando pelo
+    SCC no celular): o arquivo baixado no celular vem com nome '.xlsx'
+    mas o CONTEUDO e texto CSV puro (nao passa no teste de assinatura
+    binaria do Excel, ver _eh_arquivo_excel) - so que em Windows-1252
+    (cp1252), nao UTF-8, porque assim que o SCC/navegador do celular
+    exporta. UTF-8 e cp1252 tem baixa compatibilidade cruzada pra
+    acentos: um 'ã' sozinho em cp1252 e o byte 0xE3, que o decodificador
+    UTF-8 rejeita direto ('invalid continuation byte') por nao formar
+    uma sequencia UTF-8 valida - foi exatamente o erro que apareceu.
+
+    Tenta UTF-8 primeiro (com BOM opcional - continua sendo o formato
+    mais comum vindo do desktop); se falhar, tenta cp1252 (cobre
+    acentuacao de Windows/BR, nunca falha em decodificar um arquivo
+    de verdade porque cp1252 mapeia praticamente todo byte); como
+    ultimo recurso (nunca deveria chegar aqui) usa latin-1 substituindo
+    o que nao der pra decodificar, pra nunca travar o robo por causa
+    de encoding."""
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            return bytes_arquivo.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return bytes_arquivo.decode("latin-1", errors="replace")
+
+
 def le_csv_scc(arquivo):
     """Le o CSV exportado do SCC a partir de um objeto de upload do
     Streamlit. Devolve lista de dicts (uma por linha), igual csv.DictReader
-    do robo desktop."""
-    texto = arquivo.getvalue().decode("utf-8-sig")
+    do robo desktop.
+
+    Tambem aceita esse mesmo export salvo como .xlsx (ver
+    _le_scc_de_excel) - detectado pela assinatura binaria do arquivo,
+    nao pela extensao, entao funciona mesmo se o nome do arquivo
+    continuar dizendo '.csv' (ou, no caso oposto, '.xlsx' sem ser Excel
+    de verdade - ver _decodifica_texto_csv)."""
+    bytes_arquivo = arquivo.getvalue()
+    if _eh_arquivo_excel(bytes_arquivo):
+        return _le_scc_de_excel(bytes_arquivo)
+    texto = _decodifica_texto_csv(bytes_arquivo)
     delimitador = _detecta_delimitador(texto[:2000])
     reader = csv.DictReader(io.StringIO(texto), delimiter=delimitador)
     return list(reader)
