@@ -161,24 +161,77 @@ def consolida_recebimento(arquivo, nome_arquivo):
 #
 # Por causa da regra "nao pula etapa", nao precisa saber o texto exato
 # de todo state possivel depois do Stow (In Transit, Delivered,
-# Received, Cancelado...) - qualquer state que NAO seja "Manifested"
-# nem "Inducted" so pode significar que o pacote ja passou do Stow (se
-# nao tivesse passado, o SCC não teria como ter avançado ele pra la).
-# Isso poupa ter que confirmar cada state do fim do fluxo com um
-# arquivo de exemplo.
-ESTADOS_ANTES_DO_STOW = ("manifested", "inducted")
+# Cancelado...) - qualquer state que NAO seja um dos "antes da inducao"
+# abaixo so pode significar que o pacote ja passou do Stow (se nao
+# tivesse passado, o SCC não teria como ter avançado ele pra la). Isso
+# poupa ter que confirmar cada state do fim do fluxo com um arquivo de
+# exemplo.
+#
+# BUG real encontrado testando com CSV de verdade do SCC em 23/09/2026
+# (o exemplo sintetico anterior so tinha o texto puro "Manifested", que
+# nunca apareceu no CSV real): a etapa "antes da inducao" tem MAIS
+# variantes de texto do que só "Manifested" - viu-se no mesmo CSV
+# "Manifested (FC -> DS)" (pacote ainda em transporte da FC pra
+# estacao, nem chegou fisicamente ainda), "Arrived" (chegou no dock) e
+# "Received" (registrado no sistema da estacao) - todos ainda ANTES da
+# inducao de verdade. Com a comparacao exata antiga ("state ==
+# 'manifested'"), esses 3 caiam por engano em 'stowed_ou_alem' -
+# testado no CSV real de 524 pacotes: 14 pacotes (6 Manifested(FC->DS)
+# + 5 Arrived + 3 Received) foram contados errado como "ja induzido ou
+# além" quando na verdade nem chegaram na estacao ainda. Por isso a
+# checagem de "antes da inducao" agora usa prefixo (pega qualquer
+# variante que comece com "manifested") + essas duas palavras exatas,
+# em vez de só uma comparacao exata com "manifested".
+# --- MNR (ajuste do Samuel em 23/09/2026) ----------------------------
+#
+# Termo que ja existe no Fechamento (calculo_fechamento.py conta
+# "finalizador" comecando com "MNR", digitado a mao pelo lider na
+# revisao do State Finalizador) - explicado aqui pra usar a MESMA
+# palavra no Recebimento, em vez de inventar outra ("nao encontrado")
+# pra descrever a mesma coisa.
+#
+# O plano dos indianos (arquivo de rotas) puxa pacote pelo FATURAMENTO,
+# nao pelo manifesto de transporte - ou seja, um TBR pode aparecer
+# roteirizado no plano mesmo sem nunca ter sido de fato manifestado pro
+# hub. Duas formas de isso virar MNR:
+#
+#   1. Roteirizado mas NUNCA aparece em nenhum CSV do SCC do
+#      checkpoint (nem inducao, nem stow) - nunca chegou a ser
+#      manifestado pro hub de verdade. E o "nao_encontrado" de
+#      cruza_com_state_scc/soma_por_hub.
+#   2. Aparece no CSV (foi manifestado) mas continua preso em
+#      Manifested/Arrived/Received mesmo DEPOIS do checkpoint de stow
+#      ja ter rodado - so significa "nao chegou a ser carregado" quando
+#      o stow ja aconteceu (avaria, extravio, ou so nao deu tempo no
+#      hub de origem); enquanto so o checkpoint de INDUCAO rodou, um
+#      TBR em Manifested e normal (so ainda nao chegou a vez dele),
+#      nao e sinal de MNR nenhum ainda.
+#
+# Os dois casos so viram rotulo/aviso na tela e no Excel - NENHUM dos
+# dois trava a confirmacao do checkpoint (ver nota em cruza_com_state_scc
+# e o botao de ressalva em app.py, que ja existe pra seguir em frente
+# mesmo com essa divergencia).
+ROTULO_MNR_NAO_MANIFESTADO = "Possível MNR — não veio no manifesto (roteirizado, mas nunca chegou a ser manifestado no hub)"
+ROTULO_MNR_NAO_CARREGADO = "Possível MNR — manifestado, mas não chegou a ser carregado (avaria, extravio ou falta de tempo)"
+ROTULO_AGUARDANDO_INDUCAO = "Ainda não induzido (aguardando — normal enquanto só o checkpoint de indução rodou)"
+
+PREFIXOS_ANTES_DA_INDUCAO = ("manifested",)
+ESTADOS_ANTES_DA_INDUCAO = ("arrived", "received")
 
 
 def categoriza_state_recebimento(state_texto):
-    """Devolve 'manifested', 'inducted', 'stowed_ou_alem' (Stowed ou
-    qualquer state posterior - ver comentario acima) ou
+    """Devolve 'manifested' (ainda nao chegou/nao foi induzido - ver
+    comentario acima pras variantes de texto que caem aqui), 'inducted',
+    'stowed_ou_alem' (Stowed ou qualquer state posterior) ou
     'sem_state' (state vazio, mas TBR foi encontrado no CSV - raro,
     mesmo tratamento de state vazio que o resto do app da)."""
     state = (state_texto or "").strip().lower()
     if not state:
         return "sem_state"
-    if state in ESTADOS_ANTES_DO_STOW:
-        return state
+    if state == "inducted":
+        return "inducted"
+    if state.startswith(PREFIXOS_ANTES_DA_INDUCAO) or state in ESTADOS_ANTES_DA_INDUCAO:
+        return "manifested"
     return "stowed_ou_alem"
 
 
@@ -203,15 +256,21 @@ def cruza_com_state_scc(por_rota, linhas_csv, chave="situacao_real"):
         }
 
     Nota sobre 'confirmada' (ajuste depois de testar com dados reais em
-    21/09/2026): SO fica False por causa de manifested/inducted/sem_state
-    presos no meio do processo - "nao_encontrado" (planejado mas nunca
-    apareceu em NENHUM CSV) NAO trava a confirmacao. Motivo: nem todo
-    pacote do plano chega fisicamente na estacao todo santo dia (atraso
-    de caminhao, ficou em outra estacao etc) - isso e normal, nao e um
-    problema de processo, entao nao devia impedir a rota de ser marcada
-    como "concluida" pros que DE FATO chegaram. E exatamente por isso
-    que "nao_encontrado" fica separado (pra dar pra ver quem sumiu),
-    mas fora do calculo de 'confirmada'.
+    21/09/2026, motivo corrigido em 23/09/2026 - ver comentario grande
+    logo abaixo sobre MNR): SO fica False por causa de
+    manifested/inducted/sem_state presos no meio do processo -
+    "nao_encontrado" (planejado mas nunca apareceu em NENHUM CSV) NAO
+    trava a confirmacao. Motivo real (explicado pelo Samuel em
+    23/09/2026): o plano dos indianos puxa pacote pelo FATURAMENTO, nao
+    pelo manifesto - um TBR pode estar roteirizado sem nunca ter sido
+    de fato manifestado pro hub (isso e um MNR, mesmo termo ja usado no
+    Fechamento - ver PENDENTE_ROTULO_MNR_NAO_MANIFESTADO abaixo). Isso
+    e normal (nao e falha de processo do RECEBIMENTO - a causa e lá na
+    ponta do faturamento/roteirizacao), entao nao devia impedir a rota
+    de ser marcada como "concluida" pros que DE FATO chegaram. E
+    exatamente por isso que "nao_encontrado" fica separado (pra dar pra
+    ver quem sumiu, rotulado como possivel MNR no Excel), mas fora do
+    calculo de 'confirmada'.
 
     Devolve o proprio por_rota (modificado in-place, alem de devolvido -
     fica explicito no retorno pra quem chama nao precisar adivinhar)."""
@@ -237,6 +296,50 @@ def cruza_com_state_scc(por_rota, linhas_csv, chave="situacao_real"):
         info[chave] = situacao
 
     return por_rota
+
+
+def soma_por_hub(linhas_csv, hubs):
+    """Conta o progresso de indução/stow POR HUB, usando a coluna
+    'Source' que o próprio CSV do SCC já traz (REC9/FOR3 por TBR) - em
+    vez de depender do arquivo de rotas, que NÃO distingue hub (ajuste
+    do Samuel em 23/09/2026: cada hub manda um veículo separado, em
+    horários bem diferentes - viu-se em dois Bill of Lading reais com
+    mais de 4h de diferença entre a saída de um e a saída do outro).
+
+    Isso existe porque a checagem por ROTA (cruza_com_state_scc) mistura
+    os dois hubs - o que é correto pro total combinado, mas não ajuda a
+    responder "o REC9 já terminou?" enquanto o FOR3 ainda nem chegou (e
+    vice-versa). Como o progresso aqui vem DIRETO do CSV mais recente
+    (não acumula entre uploads), quem chama deve guardar o resultado em
+    session_state pra não perder o progresso de um hub quando o outro
+    hub for atualizado depois (ver tela_recebimento em app.py).
+
+    Devolve dict hub -> {"manifested": [tbr, ...] (ainda não induzido),
+    "inducted_apenas": [tbr, ...] (induzido, falta armazenar),
+    "inducido_ou_alem": int, "stowed_ou_alem": int, "sem_state": int} -
+    TBRs cujo Source não bate com nenhum hub conhecido (ex.: NA,
+    "CUSTOMER_ADDRESS") são ignorados, não contam em nenhum hub."""
+    resultado = {
+        hub: {"manifested": [], "inducted_apenas": [], "inducido_ou_alem": 0, "stowed_ou_alem": 0, "sem_state": 0}
+        for hub in hubs
+    }
+    for linha in linhas_csv:
+        hub = (linha.get("Source") or "").strip()
+        if hub not in resultado:
+            continue
+        tbr = (linha.get("Tracking ID") or "").strip()
+        categoria = categoriza_state_recebimento(linha.get("State"))
+        if categoria == "manifested":
+            resultado[hub]["manifested"].append(tbr)
+        elif categoria == "sem_state":
+            resultado[hub]["sem_state"] += 1
+        elif categoria == "inducted":
+            resultado[hub]["inducted_apenas"].append(tbr)
+            resultado[hub]["inducido_ou_alem"] += 1
+        elif categoria == "stowed_ou_alem":
+            resultado[hub]["inducido_ou_alem"] += 1
+            resultado[hub]["stowed_ou_alem"] += 1
+    return resultado
 
 
 # Limiar (%) acima do qual avisamos que o CSV subido num checkpoint
@@ -340,7 +443,7 @@ def _situacao_mais_recente(info):
     return info.get("situacao_stow") or info.get("situacao_inducao")
 
 
-def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None):
+def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_por_hub=None):
     """Monta o Excel final: aba 'Resumo' (pacotes/paradas por rota, com
     total no fim) + aba 'Detalhe paradas' (so as paradas com mais de 1
     pacote, pra dar pra conferir na mao se o agrupamento fez sentido -
@@ -354,7 +457,15 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None):
     ressalvas: lista opcional de dicts {"checkpoint": str, "texto": str,
     "foto_nome": str|None, "foto_bytes": bytes|None} - vira uma aba
     'Ressalvas' com o texto e a foto do Manifested embutida (quando
-    tiver), pra registro/auditoria (ver monta_texto_ressalva_padrao)."""
+    tiver), pra registro/auditoria (ver monta_texto_ressalva_padrao).
+
+    qtd_por_hub: dict opcional {hub: quantidade} (ex.: {"REC9": 314,
+    "FOR3": 210}) - a quantidade fisica digitada por hub (ajuste do
+    Samuel em 23/09/2026: o node recebe manifesto de hubs separados,
+    cada um por veiculo proprio). Nao tem como quebrar isso por ROTA no
+    Excel (o arquivo de rotas nao distingue hub por TBR), entao entra
+    como uma linha de registro logo abaixo do titulo, so pra ficar
+    documentado no arquivo final quanto veio de cada hub."""
     tem_situacao_real = any(_situacao_mais_recente(info) for info in por_rota.values())
 
     wb = openpyxl.Workbook()
@@ -364,12 +475,17 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None):
     titulo = f"Painel Recebimento - {node or '?'} - {data_arquivo.strftime('%d/%m/%Y') if data_arquivo else '?'}"
     ws.append([titulo])
     ws["A1"].font = Font(bold=True, size=13)
+    if qtd_por_hub:
+        total_hubs = sum(qtd_por_hub.values())
+        linha_hubs = " · ".join(f"{hub}: {qtd}" for hub, qtd in qtd_por_hub.items())
+        ws.append([f"Recebido por hub — {linha_hubs} · Total: {total_hubs}"])
+        ws[f"A{ws.max_row}"].font = Font(italic=True)
     ws.append([])
     cabecalho = ["Rota", "Pacotes", "Paradas"]
     if tem_situacao_real:
         cabecalho += ["Manifested", "Inducted", "Stowed ou além", "Não encontrado", "Confirmada?"]
     ws.append(cabecalho)
-    for cel in ws[3]:
+    for cel in ws[ws.max_row]:
         cel.font = Font(bold=True)
         cel.fill = PatternFill(fill_type="solid", fgColor="FFE8E8E8")
 
@@ -407,21 +523,31 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None):
         for cel in ws_pend[1]:
             cel.font = Font(bold=True)
             cel.fill = PatternFill(fill_type="solid", fgColor="FFE8E8E8")
-        rotulos = {
-            "manifested": "Ainda não induzido (Manifested)",
-            "inducted": "Induzido, falta armazenar (Inducted)",
-            "sem_state": "Achado no CSV mas sem State",
-            "nao_encontrado": "Não encontrado no CSV do SCC",
-        }
         for rota in sorted(por_rota):
-            sit = _situacao_mais_recente(por_rota[rota])
+            info = por_rota[rota]
+            sit = _situacao_mais_recente(info)
             if not sit:
                 continue
+            # Rótulo do "manifested" muda de acordo com o checkpoint mais
+            # avançado que essa rota já tem (ver comentário sobre MNR
+            # acima, perto de categoriza_state_recebimento): só DEPOIS do
+            # stow já ter rodado é que "ainda em Manifested" vira sinal de
+            # possível MNR de verdade - antes disso (só indução feita) é
+            # normal, ainda não chegou a vez desse TBR.
+            rotulo_manifested = (
+                ROTULO_MNR_NAO_CARREGADO if "situacao_stow" in info else ROTULO_AGUARDANDO_INDUCAO
+            )
+            rotulos = {
+                "manifested": rotulo_manifested,
+                "inducted": "Induzido, falta armazenar (Inducted)",
+                "sem_state": "Achado no CSV mas sem State",
+                "nao_encontrado": ROTULO_MNR_NAO_MANIFESTADO,
+            }
             for chave, rotulo in rotulos.items():
                 for tbr in sit[chave]:
                     ws_pend.append([rota, rotulo, tbr])
         ws_pend.column_dimensions["A"].width = 10
-        ws_pend.column_dimensions["B"].width = 34
+        ws_pend.column_dimensions["B"].width = 55
         ws_pend.column_dimensions["C"].width = 18
 
     ws2 = wb.create_sheet("Detalhe paradas")
