@@ -24,12 +24,14 @@ import streamlit as st
 from consolida_rotas import consolida, detecta_node_do_nome, le_tbrs_colados
 from consolida_recebimento import (
     LIMITE_ALERTA_PCT_DELIVERED,
+    ROTULO_MNR_NAO_CARREGADO,
     consolida_recebimento,
     cruza_com_state_scc,
     gera_workbook_recebimento,
     monta_texto_ressalva_padrao,
     percentual_delivered,
     soma_inducidos_ou_alem,
+    soma_por_hub,
     soma_stowed_ou_alem,
 )
 from base_das import (
@@ -54,6 +56,13 @@ from exporta_fechamento import gera_workbook_fechamento
 import parceiros as parceiros_mod
 
 NODE_ATUAL = "LRN9"  # unico node desta primeira versao (decisao ja tomada)
+
+# Hubs que mandam manifesto separado pro LRN9 (ajuste do Samuel em
+# 23/09/2026): o arquivo de rotas (plano) e a SOMA dos dois juntos, mas
+# a contagem fisica de "quantos pacotes chegaram" e feita por veiculo -
+# um veiculo por hub - entao o Painel Recebimento pede essa quantidade
+# separada por hub, nao um numero unico (ver tela_recebimento).
+HUBS_RECEBIMENTO = ["REC9", "FOR3"]
 
 # Onde a base de DAs e o histórico de TBRs moram no repositório do GitHub -
 # mesmo padrão já decidido pros arquivos de memória entre dias (dados_nodes/<NODE>/).
@@ -121,16 +130,29 @@ if "recebimento_resultado" not in st.session_state:
     st.session_state.recebimento_resultado = None
 if "recebimento_confirmado" not in st.session_state:
     st.session_state.recebimento_confirmado = False
-if "recebimento_qtd_chegou" not in st.session_state:
-    st.session_state.recebimento_qtd_chegou = 0
+if "recebimento_qtd_por_hub" not in st.session_state:
+    st.session_state.recebimento_qtd_por_hub = {hub: 0 for hub in HUBS_RECEBIMENTO}
+if "recebimento_hub_selecionado" not in st.session_state:
+    st.session_state.recebimento_hub_selecionado = None
+if "recebimento_progresso_hub" not in st.session_state:
+    # Guarda o progresso (indução/stow) de CADA hub separado, vindo da
+    # coluna Source do último CSV de cada checkpoint (ver soma_por_hub em
+    # consolida_recebimento.py) - persiste entre reruns e NÃO reseta
+    # quando o usuário só troca a quantidade digitada do outro hub, pra
+    # não perder o progresso de um hub que já terminou enquanto o outro
+    # ainda está chegando (ajuste do Samuel em 23/09/2026, hubs chegam
+    # em horários bem diferentes - viu-se em dois Bill of Lading reais).
+    st.session_state.recebimento_progresso_hub = {"inducao": None, "stow": None}
 if "recebimento_rota_selecionada" not in st.session_state:
     st.session_state.recebimento_rota_selecionada = None
-if "recebimento_ressalva_inducao_texto" not in st.session_state:
-    st.session_state.recebimento_ressalva_inducao_texto = ""
-if "recebimento_ressalva_inducao_confirmada" not in st.session_state:
-    st.session_state.recebimento_ressalva_inducao_confirmada = False
-if "recebimento_ressalva_inducao_foto" not in st.session_state:
-    st.session_state.recebimento_ressalva_inducao_foto = None
+if "recebimento_ressalva_inducao" not in st.session_state:
+    # Uma ressalva POR HUB (ajuste do Samuel em 23/09/2026) - cada hub
+    # tem o seu próprio Bill of Lading/Manifested, então a ressalva
+    # ("o físico veio a menos que o manifesto") é um evento por hub, não
+    # um número combinado dos dois.
+    st.session_state.recebimento_ressalva_inducao = {
+        hub: {"texto": "", "confirmada": False, "foto": None} for hub in HUBS_RECEBIMENTO
+    }
 if "recebimento_tem_na" not in st.session_state:
     st.session_state.recebimento_tem_na = False
 
@@ -1408,11 +1430,13 @@ def tela_recebimento():
         if st.button("🔁 Trocar arquivo de rotas"):
             st.session_state.recebimento_resultado = None
             st.session_state.recebimento_confirmado = False
-            st.session_state.recebimento_qtd_chegou = 0
+            st.session_state.recebimento_qtd_por_hub = {hub: 0 for hub in HUBS_RECEBIMENTO}
+            st.session_state.recebimento_hub_selecionado = None
+            st.session_state.recebimento_progresso_hub = {"inducao": None, "stow": None}
             st.session_state.recebimento_rota_selecionada = None
-            st.session_state.recebimento_ressalva_inducao_texto = ""
-            st.session_state.recebimento_ressalva_inducao_confirmada = False
-            st.session_state.recebimento_ressalva_inducao_foto = None
+            st.session_state.recebimento_ressalva_inducao = {
+                hub: {"texto": "", "confirmada": False, "foto": None} for hub in HUBS_RECEBIMENTO
+            }
             st.session_state.recebimento_tem_na = False
             st.rerun()
     else:
@@ -1517,12 +1541,24 @@ def tela_recebimento():
             st.code("\n".join(lista_final_tbrs), language=None, height=150)
 
     # ------------------------------------------------------------
-    # Checagem real, em 2 checkpoints (ajuste do Samuel em 21/09/2026,
-    # descrevendo o fluxo de verdade da operação): pós-indução e
-    # pós-stow. Cada checkpoint só aparece depois que o anterior "bate"
-    # — replica o processo real (não adianta olhar stow antes de bater
-    # a indução).
-    # ------------------------------------------------------------
+    # Checagem real (ajuste do Samuel em 23/09/2026, reformulado em
+    # cima do design de 21/09/2026): pós-indução e pós-stow, mas
+    # CONFERIDOS POR HUB, não combinados - REC9 e FOR3 chegam em
+    # veículos/horários bem diferentes (visto de verdade: dois Bill of
+    # Lading do mesmo dia com mais de 4h de diferença entre a saída de
+    # um e a saída do outro) - é normal um hub terminar indução+stow
+    # inteiro enquanto o outro ainda nem chegou.
+    #
+    # Antes disso era um total ÚNICO combinado, com Checkpoint 2 só
+    # aparecendo depois que o Checkpoint 1 combinado "batia" - só que
+    # atualizar a quantidade de um hub reabria a conta do outro (que já
+    # tinha batido) e escondia o Checkpoint 2 de novo, mesmo sem
+    # nenhum problema de verdade. Agora cada hub usa a coluna "Source"
+    # que o próprio CSV do SCC já traz (ver soma_por_hub em
+    # consolida_recebimento.py) pra calcular seu PRÓPRIO progresso,
+    # guardado em session_state e independente do outro hub - os dois
+    # checkpoints ficam sempre visíveis, sem depender de bater nada
+    # antes.
     st.divider()
     st.markdown("### Checagem de recebimento (opcional)")
     st.caption(
@@ -1530,19 +1566,45 @@ def tela_recebimento():
         "chegaram já passaram pelo fluxo físico (Manifested → Inducted → Stowed)."
     )
 
-    st.session_state.recebimento_qtd_chegou = st.number_input(
-        "Quantos pacotes chegaram no manifesto de transporte hoje? (contagem física, turno inteiro)",
-        min_value=0,
-        step=1,
-        value=st.session_state.recebimento_qtd_chegou,
+    st.markdown("**Quantos pacotes chegaram (por hub)**")
+    st.caption(
+        "Cada hub manda o manifesto num veículo separado — informa a quantidade física "
+        "de cada um. Os checkpoints abaixo conferem CADA hub separado, então não tem "
+        "problema um terminar horas antes do outro nem chegar."
     )
-    qtd_chegou = st.session_state.recebimento_qtd_chegou
+    hub_escolhido = st.pills(
+        "Hub",
+        HUBS_RECEBIMENTO,
+        key="recebimento_hub_selecionado",
+        label_visibility="collapsed",
+    )
+    if hub_escolhido:
+        st.session_state.recebimento_qtd_por_hub[hub_escolhido] = st.number_input(
+            f"Quantos pacotes chegaram do {hub_escolhido}? (contagem física, turno inteiro)",
+            min_value=0,
+            step=1,
+            value=st.session_state.recebimento_qtd_por_hub[hub_escolhido],
+        )
+    else:
+        st.caption("☝️ Escolhe um hub acima pra informar a quantidade.")
 
-    inducao_ok = False
+    qtd_chegou = sum(st.session_state.recebimento_qtd_por_hub.values())
+    resumo_hubs = " · ".join(
+        f"{hub}: {st.session_state.recebimento_qtd_por_hub[hub]}" for hub in HUBS_RECEBIMENTO
+    )
+    st.caption(f"{resumo_hubs} · **Total: {qtd_chegou}**")
+
     if qtd_chegou > 0:
         st.markdown("**Checkpoint 1 — pós-indução**")
+        # SEM restrição de tipo (type=None) de propósito - mesmo motivo
+        # da Etapa 1 do Fechamento (seletor do Android/Chrome às vezes
+        # bloqueia o próprio CSV exportado do SCC por causa do "tipo"
+        # que o navegador salvou no download) - e também aceita o CSV
+        # salvo sem querer como .xlsx (visto de verdade em 23/09/2026 -
+        # ver le_csv_scc em base_das.py, que detecta os dois formatos
+        # pela assinatura do arquivo, não pela extensão).
         csv_inducao = st.file_uploader(
-            "CSV do SCC pós-indução (Tracking ID + State)", type=["csv"], key="upload_csv_inducao"
+            "CSV (ou Excel) do SCC pós-indução (Tracking ID + State)", type=None, key="upload_csv_inducao"
         )
         if csv_inducao is not None:
             try:
@@ -1551,74 +1613,89 @@ def tela_recebimento():
                 st.error(f"Não consegui ler esse CSV: {e}")
             else:
                 _avisa_se_parece_csv_fechamento(por_rota, linhas_csv_inducao)
+                # Combinado (todas as rotas juntas, todos os hubs) -
+                # continua alimentando o "Painel por rota" mais abaixo e
+                # a aba Pendentes do Excel, que não distinguem hub.
                 cruza_com_state_scc(por_rota, linhas_csv_inducao, chave="situacao_inducao")
-
-        if any("situacao_inducao" in info for info in por_rota.values()):
-            total_inducao = soma_inducidos_ou_alem(por_rota)
-            diferenca = qtd_chegou - total_inducao
-            if diferenca == 0:
-                st.success(f"Bateu: {total_inducao} induzido(s) (ou além) = {qtd_chegou} que chegaram. Segue pro stow.")
-                inducao_ok = True
-            else:
-                st.warning(
-                    f"Não bateu ainda: {total_inducao} induzido(s) (ou além) vs {qtd_chegou} que "
-                    f"chegaram (faltam {diferenca}). Confere quem falta induzir, ou sobe o CSV de "
-                    "novo depois de corrigir."
+                # Por hub (novo) - é isso que os cartões abaixo usam.
+                st.session_state.recebimento_progresso_hub["inducao"] = soma_por_hub(
+                    linhas_csv_inducao, HUBS_RECEBIMENTO
                 )
-                with st.expander("Quem ainda está Manifested (falta induzir)"):
-                    for rota in sorted(por_rota):
-                        pendentes = por_rota[rota]["situacao_inducao"]["manifested"]
-                        if pendentes:
-                            st.markdown(f"**{rota}** ({len(pendentes)}): {', '.join(pendentes)}")
 
-                # Ressalva do líder (ajuste do Samuel em 21/09/2026): se
-                # depois de reconferir o físico o número continuar
-                # diferente do Manifested, isso pode não ser erro de
-                # processo — pode ser que o físico mesmo veio a menos do
-                # que o manifesto (Bill of Lading) diz. Não trava
-                # esperando um número que pode nunca bater — o líder
-                # registra a ressalva (texto + foto opcional do
-                # Manifested) e segue mesmo assim.
-                if st.session_state.recebimento_ressalva_inducao_confirmada:
-                    st.info("📋 Ressalva registrada — seguindo pro stow mesmo com a diferença.")
-                    with st.expander("Ver ressalva registrada"):
-                        st.text(st.session_state.recebimento_ressalva_inducao_texto)
-                    if st.button("✏️ Editar ressalva"):
-                        st.session_state.recebimento_ressalva_inducao_confirmada = False
+        progresso_inducao = st.session_state.recebimento_progresso_hub["inducao"]
+        if progresso_inducao is None:
+            st.caption("Sobe o CSV acima pra ver o progresso de indução de cada hub.")
+        else:
+            for hub in HUBS_RECEBIMENTO:
+                qtd_hub = st.session_state.recebimento_qtd_por_hub[hub]
+                if qtd_hub == 0:
+                    continue  # hub ainda não informou quantidade - nada a comparar ainda
+                dados_hub = progresso_inducao[hub]
+                induzido_hub = dados_hub["inducido_ou_alem"]
+                diferenca_hub = qtd_hub - induzido_hub
+                if diferenca_hub == 0:
+                    st.success(f"**{hub}**: bateu — {induzido_hub} induzido(s) (ou além) = {qtd_hub} que chegaram.")
+                    continue
+
+                st.warning(
+                    f"**{hub}**: não bateu ainda — {induzido_hub} induzido(s) (ou além) vs {qtd_hub} "
+                    f"que chegaram (faltam {diferenca_hub})."
+                )
+                if dados_hub["manifested"]:
+                    with st.expander(f"{hub} — quem ainda está Manifested (falta induzir)"):
+                        st.write(", ".join(dados_hub["manifested"]))
+
+                # Ressalva do líder, por hub (ajuste do Samuel em
+                # 21/09/2026, adaptado pra por-hub em 23/09/2026 - cada
+                # hub tem seu próprio Bill of Lading, então "o físico
+                # veio a menos que o manifesto" é um evento por hub):
+                # se depois de reconferir o físico o número continuar
+                # diferente do Manifested desse hub, o líder registra
+                # uma ressalva (texto + foto opcional do Manifested
+                # daquele hub) e segue mesmo assim, sem travar.
+                ressalva_hub = st.session_state.recebimento_ressalva_inducao[hub]
+                if ressalva_hub["confirmada"]:
+                    st.info(f"📋 Ressalva do **{hub}** registrada — seguindo mesmo com a diferença.")
+                    with st.expander(f"Ver ressalva registrada — {hub}"):
+                        st.text(ressalva_hub["texto"])
+                    if st.button(f"✏️ Editar ressalva — {hub}", key=f"editar_ressalva_{hub}"):
+                        st.session_state.recebimento_ressalva_inducao[hub]["confirmada"] = False
                         st.rerun()
-                    inducao_ok = True
                 else:
-                    with st.expander("📋 Registrar ressalva (se o físico realmente veio a menos)"):
+                    with st.expander(f"📋 Registrar ressalva do {hub} (se o físico realmente veio a menos)"):
                         st.caption(
                             "Se depois de reconferir pacote a pacote o número continuar diferente "
-                            "do Manifested (não é erro de processo, é isso mesmo), registra abaixo "
-                            "pra liberar o próximo passo sem ficar preso esperando bater."
+                            "do Manifested do Bill of Lading desse hub (não é erro de processo, é "
+                            "isso mesmo), registra abaixo pra seguir mesmo assim."
                         )
-                        texto_padrao = monta_texto_ressalva_padrao(node_texto, qtd_chegou, total_inducao)
+                        texto_padrao = monta_texto_ressalva_padrao(f"{node_texto} ({hub})", qtd_hub, induzido_hub)
                         texto_ressalva = st.text_area(
                             "Texto da ressalva",
-                            value=st.session_state.recebimento_ressalva_inducao_texto or texto_padrao,
+                            value=ressalva_hub["texto"] or texto_padrao,
                             height=180,
-                            key="texto_area_ressalva_inducao",
+                            key=f"texto_area_ressalva_{hub}",
                         )
                         foto_manifested = st.file_uploader(
-                            "Foto do Manifested (Bill of Lading) — opcional",
+                            f"Foto do Manifested (Bill of Lading) do {hub} — opcional",
                             type=["jpg", "jpeg", "png", "pdf"],
-                            key="upload_foto_manifested",
+                            key=f"upload_foto_manifested_{hub}",
                         )
-                        if st.button("✅ Confirmar ressalva e seguir mesmo assim"):
-                            st.session_state.recebimento_ressalva_inducao_texto = texto_ressalva
-                            st.session_state.recebimento_ressalva_inducao_confirmada = True
+                        if st.button(f"✅ Confirmar ressalva do {hub} e seguir mesmo assim", key=f"confirma_ressalva_{hub}"):
+                            st.session_state.recebimento_ressalva_inducao[hub]["texto"] = texto_ressalva
+                            st.session_state.recebimento_ressalva_inducao[hub]["confirmada"] = True
                             if foto_manifested is not None:
-                                st.session_state.recebimento_ressalva_inducao_foto = (
+                                st.session_state.recebimento_ressalva_inducao[hub]["foto"] = (
                                     foto_manifested.name, foto_manifested.getvalue()
                                 )
                             st.rerun()
 
-    if inducao_ok:
         st.markdown("**Checkpoint 2 — pós-stow**")
+        st.caption(
+            "Sempre disponível — não precisa esperar o Checkpoint 1 bater pra conferir o "
+            "stow de um hub que já terminou a indução."
+        )
         csv_stow = st.file_uploader(
-            "CSV do SCC pós-stow (Tracking ID + State)", type=["csv"], key="upload_csv_stow"
+            "CSV (ou Excel) do SCC pós-stow (Tracking ID + State)", type=None, key="upload_csv_stow"
         )
         if csv_stow is not None:
             try:
@@ -1628,22 +1705,44 @@ def tela_recebimento():
             else:
                 _avisa_se_parece_csv_fechamento(por_rota, linhas_csv_stow)
                 cruza_com_state_scc(por_rota, linhas_csv_stow, chave="situacao_stow")
-
-        if any("situacao_stow" in info for info in por_rota.values()):
-            total_stow = soma_stowed_ou_alem(por_rota)
-            diferenca = qtd_chegou - total_stow
-            if diferenca == 0:
-                st.success(f"Bateu: {total_stow} armazenado(s) (Stowed ou além) = {qtd_chegou} que chegaram.")
-            else:
-                st.warning(
-                    f"Não bateu ainda: {total_stow} armazenado(s) vs {qtd_chegou} que chegaram "
-                    f"(faltam {diferenca}). Confere quem falta fazer stow abaixo."
+                st.session_state.recebimento_progresso_hub["stow"] = soma_por_hub(
+                    linhas_csv_stow, HUBS_RECEBIMENTO
                 )
-                with st.expander("Quem ainda está Inducted (falta armazenar)"):
-                    for rota in sorted(por_rota):
-                        pendentes = por_rota[rota]["situacao_stow"]["inducted"]
-                        if pendentes:
-                            st.markdown(f"**{rota}** ({len(pendentes)}): {', '.join(pendentes)}")
+
+        progresso_stow = st.session_state.recebimento_progresso_hub["stow"]
+        if progresso_stow is None:
+            st.caption("Sobe o CSV acima pra ver o progresso de stow de cada hub.")
+        else:
+            for hub in HUBS_RECEBIMENTO:
+                qtd_hub = st.session_state.recebimento_qtd_por_hub[hub]
+                if qtd_hub == 0:
+                    continue
+                dados_hub = progresso_stow[hub]
+                stow_hub = dados_hub["stowed_ou_alem"]
+                diferenca_hub = qtd_hub - stow_hub
+                if diferenca_hub == 0:
+                    st.success(f"**{hub}**: bateu — {stow_hub} armazenado(s) (ou além) = {qtd_hub} que chegaram.")
+                else:
+                    st.warning(
+                        f"**{hub}**: não bateu ainda — {stow_hub} armazenado(s) vs {qtd_hub} que "
+                        f"chegaram (faltam {diferenca_hub})."
+                    )
+                    if dados_hub["inducted_apenas"]:
+                        with st.expander(f"{hub} — quem ainda está Inducted (falta armazenar)"):
+                            st.write(", ".join(dados_hub["inducted_apenas"]))
+
+                # Possível MNR (ajuste do Samuel em 23/09/2026): se um TBR
+                # AINDA está em Manifested/Arrived/Received mesmo depois do
+                # checkpoint de STOW já ter rodado, ele não chegou a ser
+                # carregado de verdade (avaria, extravio ou falta de tempo
+                # no hub de origem) - diferente de estar em Manifested só
+                # no checkpoint de indução (isso aí é normal, só ainda não
+                # chegou a vez). Só avisa, não trava - a ressalva acima já
+                # cobre seguir em frente mesmo com essa diferença.
+                if dados_hub["manifested"]:
+                    st.warning(f"**{hub}**: {len(dados_hub['manifested'])} TBR(s) — {ROTULO_MNR_NAO_CARREGADO}")
+                    with st.expander(f"{hub} — possíveis MNR (TBRs)"):
+                        st.write(", ".join(dados_hub["manifested"]))
 
     # ------------------------------------------------------------
     # Painel final por rota — cards clicáveis (pedido do Samuel em
@@ -1660,7 +1759,7 @@ def tela_recebimento():
         st.caption(
             f"{rotas_confirmadas} de {len(por_rota)} rota(s) confirmada(s) — 100% Stowed, "
             "considerando só quem chegou (quem nunca apareceu no CSV não trava a confirmação, "
-            "só entra como 'não encontrado')."
+            "só entra como possível MNR — ver aba Pendentes no Excel final)."
         )
 
     rotas_ordenadas = sorted(por_rota)
@@ -1694,19 +1793,22 @@ def tela_recebimento():
         )
 
     ressalvas = []
-    if st.session_state.recebimento_ressalva_inducao_confirmada:
-        foto_nome, foto_bytes = st.session_state.recebimento_ressalva_inducao_foto or (None, None)
-        ressalvas.append({
-            "checkpoint": "Pós-indução",
-            "texto": st.session_state.recebimento_ressalva_inducao_texto,
-            "foto_nome": foto_nome,
-            "foto_bytes": foto_bytes,
-        })
+    for hub in HUBS_RECEBIMENTO:
+        ressalva_hub = st.session_state.recebimento_ressalva_inducao[hub]
+        if ressalva_hub["confirmada"]:
+            foto_nome, foto_bytes = ressalva_hub["foto"] or (None, None)
+            ressalvas.append({
+                "checkpoint": f"Pós-indução — {hub}",
+                "texto": ressalva_hub["texto"],
+                "foto_nome": foto_nome,
+                "foto_bytes": foto_bytes,
+            })
 
     st.divider()
     st.caption(
         "Confere a prévia acima antes de gerar o arquivo — o Excel final vai ter "
-        "essa mesma tabela (aba Resumo) + o detalhe do agrupamento (aba Detalhe paradas) "
+        "essa mesma tabela (aba Resumo, com a quantidade recebida por hub registrada "
+        "no topo) + o detalhe do agrupamento (aba Detalhe paradas) "
         "+ a checagem real, se algum checkpoint já foi feito"
         + (" + a ressalva registrada (com a foto, se tiver)." if ressalvas else ".")
     )
@@ -1714,7 +1816,11 @@ def tela_recebimento():
         st.session_state.recebimento_confirmado = True
 
     if st.session_state.recebimento_confirmado:
-        excel_bytes = gera_workbook_recebimento(por_rota, node_texto, data_arquivo, ressalvas=ressalvas)
+        excel_bytes = gera_workbook_recebimento(
+            por_rota, node_texto, data_arquivo,
+            ressalvas=ressalvas,
+            qtd_por_hub=st.session_state.recebimento_qtd_por_hub,
+        )
         nome_arquivo = f"painel_recebimento_{node_texto}_{data_arquivo.strftime('%Y%m%d') if data_arquivo else 'sem_data'}.xlsx"
         st.download_button(
             "⬇️ Baixar Excel",
