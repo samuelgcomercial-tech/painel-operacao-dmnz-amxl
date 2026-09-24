@@ -137,7 +137,12 @@ if "recebimento_ressalva_inducao" not in st.session_state:
     # num arquivo com os dois hubs misturados não tem como saber a
     # qual dos dois um TBR com Source errado pertence. Voltou a ser um
     # número único combinado (sem escolha de hub, sem botão).
-    st.session_state.recebimento_ressalva_inducao = {"texto": "", "confirmada": False, "foto": None}
+    #
+    # "fotos" (lista, ajuste do Samuel em 24/09/2026 - antes era 1 foto
+    # só): serve pra anexar mais de uma imagem/documento - foto do
+    # Manifested (Bill of Lading), foto de pacote avariado, e afins -
+    # tudo junto no mesmo registro de ressalva, sem limite de 1.
+    st.session_state.recebimento_ressalva_inducao = {"texto": "", "confirmada": False, "fotos": []}
 if "recebimento_tem_na" not in st.session_state:
     st.session_state.recebimento_tem_na = False
 
@@ -1450,7 +1455,7 @@ def tela_recebimento():
             st.session_state.recebimento_confirmado = False
             st.session_state.recebimento_qtd_chegou = 0
             st.session_state.recebimento_rota_selecionada = None
-            st.session_state.recebimento_ressalva_inducao = {"texto": "", "confirmada": False, "foto": None}
+            st.session_state.recebimento_ressalva_inducao = {"texto": "", "confirmada": False, "fotos": []}
             st.session_state.recebimento_tem_na = False
             st.rerun()
     else:
@@ -1617,62 +1622,72 @@ def tela_recebimento():
                 with st.expander("Quem ainda está Manifested (falta induzir)"):
                     st.write(", ".join(manifested_pendentes))
 
-            # Ressalva do líder (ajuste do Samuel em 21/09/2026): SÓ faz
-            # sentido quando realmente falta induzir gente (diferenca >
-            # 0) - se diferenca < 0 (mais induzido do que o informado),
-            # o problema é outro (número digitado desatualizado, ver
-            # _mostra_diferenca_checkpoint acima), não "o físico veio a
-            # menos", então não faz sentido oferecer essa ressalva aqui.
-            if diferenca > 0:
-                ressalva = st.session_state.recebimento_ressalva_inducao
-                if ressalva["confirmada"]:
-                    st.info("📋 Ressalva registrada — seguindo mesmo com a diferença.")
-                    with st.expander("Ver ressalva registrada"):
-                        st.text(ressalva["texto"])
-                    if st.button("✏️ Editar ressalva"):
-                        st.session_state.recebimento_ressalva_inducao["confirmada"] = False
+            # Ressalva/anexos do líder (ajuste do Samuel em 21/09/2026,
+            # ampliado em 24/09/2026): SEMPRE disponível agora, não só
+            # quando falta induzir - o Samuel quer poder anexar foto do
+            # Manifested (Bill of Lading), foto de pacote avariado e
+            # afins mesmo quando bateu certinho ou veio a mais. Aceita
+            # VÁRIAS fotos/documentos de uma vez (antes era só 1).
+            ressalva = st.session_state.recebimento_ressalva_inducao
+            if ressalva["confirmada"]:
+                qtd_fotos = len(ressalva["fotos"])
+                st.info(
+                    "📋 Ressalva registrada"
+                    + (f" — {qtd_fotos} foto(s)/documento(s) anexado(s)." if qtd_fotos else ".")
+                )
+                with st.expander("Ver ressalva registrada"):
+                    st.text(ressalva["texto"])
+                    for nome, _ in ressalva["fotos"]:
+                        st.caption(f"📎 {nome}")
+                if st.button("✏️ Editar ressalva"):
+                    st.session_state.recebimento_ressalva_inducao["confirmada"] = False
+                    st.rerun()
+            else:
+                with st.expander("📋 Registrar ressalva / anexar fotos (opcional)"):
+                    st.caption(
+                        "Pra registrar qualquer observação do recebimento — número que não bateu "
+                        "com o Manifested, pacote avariado, ou qualquer outra coisa que precise "
+                        "ficar documentada — com foto(s) se precisar. Não trava nada, é só registro."
+                    )
+                    # Só pré-preenche o texto padrão ("veio a menos...")
+                    # quando realmente falta induzir gente (diferenca >
+                    # 0) - se bateu ou veio a mais, esse texto ficaria
+                    # errado, então a caixa nasce vazia e o líder escreve
+                    # livremente (ex: sobre uma avaria).
+                    texto_padrao = (
+                        monta_texto_ressalva_padrao(node_texto, qtd_chegou, induzido) if diferenca > 0 else ""
+                    )
+                    # Bug corrigido em 24/09/2026 (visto de verdade pelo
+                    # Samuel): a key dessa caixa era FIXA
+                    # ("texto_area_ressalva") - depois que o Streamlit
+                    # guarda um valor pra essa key, o parametro value= é
+                    # IGNORADO nos reruns seguintes, mesmo que
+                    # qtd_chegou/induzido mudem (ex: subiu outro CSV com
+                    # número diferente) - a caixa ficava mostrando o
+                    # texto padrão antigo, calculado com o numero de
+                    # ANTES. Botando os numeros atuais na key, uma key
+                    # nova (= caixa nova, com o valor novo) nasce toda
+                    # vez que os numeros mudam - só continua com o texto
+                    # digitado enquanto os numeros nao mudarem.
+                    texto_ressalva = st.text_area(
+                        "Texto (observação, ressalva, o que for)",
+                        value=ressalva["texto"] or texto_padrao,
+                        height=180,
+                        key=f"texto_area_ressalva_{qtd_chegou}_{induzido}",
+                    )
+                    fotos_manifested = st.file_uploader(
+                        "Fotos/documentos (Manifested, avaria, etc.) — opcional, pode escolher várias",
+                        type=["jpg", "jpeg", "png", "pdf"],
+                        accept_multiple_files=True,
+                        key="upload_fotos_ressalva",
+                    )
+                    if st.button("✅ Confirmar e seguir mesmo assim"):
+                        st.session_state.recebimento_ressalva_inducao["texto"] = texto_ressalva
+                        st.session_state.recebimento_ressalva_inducao["confirmada"] = True
+                        st.session_state.recebimento_ressalva_inducao["fotos"] = [
+                            (arq.name, arq.getvalue()) for arq in fotos_manifested
+                        ]
                         st.rerun()
-                else:
-                    with st.expander("📋 Registrar ressalva (se o físico realmente veio a menos)"):
-                        st.caption(
-                            "Se depois de reconferir pacote a pacote o número continuar diferente "
-                            "do Manifested do Bill of Lading (não é erro de processo, é isso "
-                            "mesmo), registra abaixo pra seguir mesmo assim."
-                        )
-                        texto_padrao = monta_texto_ressalva_padrao(node_texto, qtd_chegou, induzido)
-                        # Bug corrigido em 24/09/2026 (visto de verdade
-                        # pelo Samuel): a key dessa caixa era FIXA
-                        # ("texto_area_ressalva") - depois que o
-                        # Streamlit guarda um valor pra essa key, o
-                        # parametro value= é IGNORADO nos reruns
-                        # seguintes, mesmo que qtd_chegou/induzido
-                        # mudem (ex: subiu outro CSV com número
-                        # diferente) - a caixa ficava mostrando o texto
-                        # padrão antigo, calculado com o numero de
-                        # ANTES. Botando os numeros atuais na key, uma
-                        # key nova (= caixa nova, com o valor novo)
-                        # nasce toda vez que os numeros mudam - só
-                        # continua com o texto digitado enquanto os
-                        # numeros nao mudarem.
-                        texto_ressalva = st.text_area(
-                            "Texto da ressalva",
-                            value=ressalva["texto"] or texto_padrao,
-                            height=180,
-                            key=f"texto_area_ressalva_{qtd_chegou}_{induzido}",
-                        )
-                        foto_manifested = st.file_uploader(
-                            "Foto do Manifested (Bill of Lading) — opcional",
-                            type=["jpg", "jpeg", "png", "pdf"],
-                            key="upload_foto_manifested",
-                        )
-                        if st.button("✅ Confirmar ressalva e seguir mesmo assim"):
-                            st.session_state.recebimento_ressalva_inducao["texto"] = texto_ressalva
-                            st.session_state.recebimento_ressalva_inducao["confirmada"] = True
-                            if foto_manifested is not None:
-                                st.session_state.recebimento_ressalva_inducao["foto"] = (
-                                    foto_manifested.name, foto_manifested.getvalue()
-                                )
-                            st.rerun()
 
         st.markdown("**Checkpoint 2 — pós-stow**")
         st.caption("Sempre disponível — não precisa esperar o Checkpoint 1 bater pra conferir o stow.")
@@ -1770,12 +1785,10 @@ def tela_recebimento():
     ressalvas = []
     ressalva = st.session_state.recebimento_ressalva_inducao
     if ressalva["confirmada"]:
-        foto_nome, foto_bytes = ressalva["foto"] or (None, None)
         ressalvas.append({
             "checkpoint": "Pós-indução",
             "texto": ressalva["texto"],
-            "foto_nome": foto_nome,
-            "foto_bytes": foto_bytes,
+            "fotos": ressalva["fotos"],  # lista de (nome, bytes) - pode ter 0, 1 ou várias
         })
 
     st.divider()
