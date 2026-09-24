@@ -1858,7 +1858,9 @@ def tela_recebimento():
             ressalvas=ressalvas,
             qtd_chegou=st.session_state.recebimento_qtd_chegou,
         )
-        nome_arquivo = f"painel_recebimento_{node_texto}_{data_arquivo.strftime('%Y%m%d') if data_arquivo else 'sem_data'}.xlsx"
+        # Formato ddmmaaaa no nome do arquivo (ajuste do Samuel em
+        # 24/09/2026 - antes era aaaammdd).
+        nome_arquivo = f"painel_recebimento_{node_texto}_{data_arquivo.strftime('%d%m%Y') if data_arquivo else 'sem_data'}.xlsx"
         st.download_button(
             "⬇️ Baixar Excel",
             data=excel_bytes,
