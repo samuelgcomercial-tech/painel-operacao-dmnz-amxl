@@ -57,6 +57,7 @@ da pra revisar isso depois (o campo CEP/Postal tambem poderia ajudar
 como reforco, mas nao foi necessario ate agora).
 """
 
+import html
 import io
 import re
 import unicodedata
@@ -73,11 +74,26 @@ def normaliza_endereco_base(endereco):
     """Pega so 'rua + numero' (tudo antes da primeira virgula) e
     normaliza (sem acento, minusculo, sem espaco duplicado) pra usar
     como chave de agrupamento. Enderecos identicos depois dessa
-    normalizacao viram UMA parada so."""
-    base = (endereco or "").split(",")[0]
+    normalizacao viram UMA parada so.
+
+    Faz html.unescape() ANTES de normalizar (bug encontrado pelo Samuel
+    em 24/09/2026: o arquivo de rotas as vezes traz o endereco com
+    entidade HTML tipo "jer&ocirc;nimo c&acirc;mara" em vez de "jerônimo
+    câmara" - sem o unescape, essas letras ficam intactas (ja sao ascii)
+    e o endereco vira uma chave DIFERENTE de "avenida jeronimo camara",
+    quebrando o agrupamento em 2 paradas quando era 1 so)."""
+    base = html.unescape(endereco or "").split(",")[0]
     base = unicodedata.normalize("NFKD", base).encode("ascii", "ignore").decode("ascii")
     base = re.sub(r"\s+", " ", base).strip().lower()
     return base
+
+
+def endereco_para_exibicao(endereco):
+    """Versao do endereco pra MOSTRAR pro usuario (no Excel/tela) - so
+    desfaz a entidade HTML e tira espaco/virgula sobrando nas pontas,
+    mas MANTEM acento e maiusculo/minusculo (ao contrario da chave de
+    agrupamento acima, que e só pra comparar, não pra ler)."""
+    return html.unescape(endereco or "").strip().strip(",").strip()
 
 
 def consolida_recebimento(arquivo, nome_arquivo):
@@ -87,9 +103,20 @@ def consolida_recebimento(arquivo, nome_arquivo):
     por_rota: dict rota -> {
         "pacotes": int,
         "paradas": int,
-        "detalhe_paradas": [ {"endereco_base": str, "qtd_pacotes": int,
-                               "tbrs": [str, ...]}, ... ]  (so as com
-                               mais de 1 pacote, pra revisao visual)
+        "detalhe_paradas": [ {"endereco_base": str, "endereco_exibicao": str,
+                               "qtd_pacotes": int, "tbrs": [str, ...]}, ... ]
+                               (so as paradas com mais de 1 pacote - usado
+                               no expander "Conferir agrupamento" da tela,
+                               que e so pra revisar se o agrupamento fez
+                               sentido, nao precisa listar parada de 1 so),
+        "todas_paradas": [ mesma coisa acima, mas TODAS as paradas,
+                            inclusive as de 1 pacote so - usado na aba
+                            "Detalhe paradas" do Excel exportado (ajuste
+                            do Samuel em 24/09/2026: reparou que a aba
+                            exportada nao trazia todos os TBR - o
+                            expander da tela sempre foi só um resumo de
+                            conferência, mas o Excel final precisa ter
+                            TODOS, pra servir de registro completo) ]
     }
     """
     abas, data_criacao_excel = _carrega_planilha(arquivo, nome_arquivo)
@@ -106,7 +133,7 @@ def consolida_recebimento(arquivo, nome_arquivo):
         linhas = abas[nome_aba]
         rota = nome_aba.split("_")[-1]  # "sequencedRoute_AX1" -> "AX1"
 
-        paradas = {}  # endereco_base -> [tbr, ...], na ordem em que apareceram
+        paradas = {}  # endereco_base -> {"endereco_exibicao": str, "tbrs": [tbr, ...]}, na ordem em que apareceram
         tbrs_da_rota = []  # todos os TBR da rota, na ordem do arquivo (pra cruzar com o CSV do SCC depois)
         itens = []  # [{"stop":, "tbr":, "endereco":}], na ordem do arquivo - pra consulta TBR+endereco na tela
         pacotes = 0
@@ -121,19 +148,28 @@ def consolida_recebimento(arquivo, nome_arquivo):
             tbrs_da_rota.append(tbr)
             itens.append({"stop": stop, "tbr": tbr, "endereco": endereco or ""})
             chave = normaliza_endereco_base(endereco)
-            paradas.setdefault(chave, []).append(tbr)
+            grupo = paradas.setdefault(
+                chave, {"endereco_exibicao": endereco_para_exibicao(endereco), "tbrs": []}
+            )
+            grupo["tbrs"].append(tbr)
 
-        detalhe_paradas = [
-            {"endereco_base": chave, "qtd_pacotes": len(tbrs), "tbrs": tbrs}
-            for chave, tbrs in paradas.items()
-            if len(tbrs) > 1
+        todas_paradas = [
+            {
+                "endereco_base": chave,
+                "endereco_exibicao": grupo["endereco_exibicao"],
+                "qtd_pacotes": len(grupo["tbrs"]),
+                "tbrs": grupo["tbrs"],
+            }
+            for chave, grupo in paradas.items()
         ]
-        detalhe_paradas.sort(key=lambda d: -d["qtd_pacotes"])
+        todas_paradas.sort(key=lambda d: -d["qtd_pacotes"])
+        detalhe_paradas = [d for d in todas_paradas if d["qtd_pacotes"] > 1]
 
         por_rota[rota] = {
             "pacotes": pacotes,
             "paradas": len(paradas),
             "detalhe_paradas": detalhe_paradas,
+            "todas_paradas": todas_paradas,
             "tbrs": tbrs_da_rota,
             "itens": itens,
         }
@@ -213,7 +249,6 @@ def consolida_recebimento(arquivo, nome_arquivo):
 # mesmo com essa divergencia).
 ROTULO_MNR_NAO_MANIFESTADO = "Possível MNR — não veio no manifesto (roteirizado, mas nunca chegou a ser manifestado no hub)"
 ROTULO_MNR_NAO_CARREGADO = "Possível MNR — manifestado, mas não chegou a ser carregado (avaria, extravio ou falta de tempo)"
-ROTULO_AGUARDANDO_INDUCAO = "Ainda não induzido (aguardando — normal enquanto só o checkpoint de indução rodou)"
 
 PREFIXOS_ANTES_DA_INDUCAO = ("manifested",)
 ESTADOS_ANTES_DA_INDUCAO = ("arrived", "received")
@@ -405,24 +440,64 @@ def monta_texto_ressalva_padrao(node, manifested, fisico):
     )
 
 
-def _situacao_mais_recente(info):
-    """Pega o checkpoint mais avancado que essa rota ja tem: stow (mais
-    recente) > inducao > nenhum. Usado pra decidir o que mostrar no
-    Excel sem o chamador precisar saber em que checkpoint o usuario
-    parou."""
-    return info.get("situacao_stow") or info.get("situacao_inducao")
+def monta_texto_copia_mnr(por_rota):
+    """Monta o texto 'empilhado' (um TBR por linha, cada um com ':' no
+    final) dos TBRs que ficaram como possivel MNR no checkpoint mais
+    avancado disponivel de cada rota (STOW, se ja rodou - e so faz
+    sentido de verdade DEPOIS do stow, ver comentario sobre MNR mais
+    acima) - pensado pra:
+
+      1. Mostrar num st.code() com icone de copiar (mesmo padrao ja
+         usado na Etapa 1 do Fechamento), pro lider copiar a lista
+         inteira de uma vez.
+      2. Vir pre-preenchido na caixa de texto da ressalva final, pro
+         lider so completar a analise depois de cada ':'.
+
+    Ajuste do Samuel em 24/09/2026: substitui a aba 'Pendentes' que
+    existia no Excel - em vez de so listar os TBR num Excel a parte
+    (sem espaco pra explicar o motivo de cada um), agora o proprio
+    lider detalha a analise de cada TBR na ressalva.
+
+    So considera rotas que ja tem 'situacao_stow' (rota sem stow ainda
+    nao entra aqui - nao faz sentido cobrar analise de MNR de quem
+    ainda nem chegou nessa etapa). Devolve "" se nenhuma rota tiver
+    stow ainda."""
+    nao_carregado, nao_manifestado, sem_state = [], [], []
+    for info in por_rota.values():
+        sit = info.get("situacao_stow")
+        if not sit:
+            continue
+        nao_carregado += sit["manifested"]
+        nao_manifestado += sit["nao_encontrado"]
+        sem_state += sit["sem_state"]
+
+    blocos = []
+    if nao_carregado:
+        blocos.append(f"{ROTULO_MNR_NAO_CARREGADO}:\n" + "\n".join(f"{tbr}: " for tbr in nao_carregado))
+    if nao_manifestado:
+        blocos.append(f"{ROTULO_MNR_NAO_MANIFESTADO}:\n" + "\n".join(f"{tbr}: " for tbr in nao_manifestado))
+    if sem_state:
+        blocos.append("Achado no CSV mas sem State:\n" + "\n".join(f"{tbr}: " for tbr in sem_state))
+    return "\n\n".join(blocos)
 
 
 def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_chegou=None):
-    """Monta o Excel final: aba 'Resumo' (pacotes/paradas por rota, com
-    total no fim) + aba 'Detalhe paradas' (so as paradas com mais de 1
-    pacote, pra dar pra conferir na mao se o agrupamento fez sentido -
-    ver o comentario grande no topo do arquivo sobre a regra usada e a
-    limitacao dela). Se alguma rota tiver checagem real (cruzou com o
-    CSV do SCC na inducao e/ou no stow - ver cruza_com_state_scc), a
-    aba Resumo ganha as colunas extras (do checkpoint mais avancado
-    disponivel) e entra uma aba 'Pendentes' com o detalhe de quem
-    ainda nao chegou em Stowed.
+    """Monta o Excel final: aba 'Resumo' (pacotes/paradas/Em Stow por
+    rota, com total no fim) + aba 'Detalhe paradas' (todos os TBR da
+    rota, ver comentario grande no topo do arquivo sobre a regra usada
+    pra agrupar parada e a limitacao dela) + aba 'Ressalvas', se tiver.
+
+    Ajuste do Samuel em 24/09/2026 (reformulacao da aba Resumo e fim da
+    aba Pendentes): a aba Resumo agora só traz a coluna 'Em Stow' (TBR
+    ja Stowed ou alem, por rota) - é o que REALMENTE vai ser expedido
+    pela manhã, entao é o unico numero que importa aqui; só aparece
+    quando pelo menos uma rota já rodou o checkpoint de STOW (antes da
+    indução sozinha, a coluna nem aparecia - nao faz sentido mostrar
+    "Em Stow" de quem ainda nem foi induzido). A aba 'Pendentes' (que
+    listava TBR x situação, sem espaço pra análise) foi REMOVIDA - o
+    detalhe de cada possível MNR agora fica na aba 'Ressalvas', escrito
+    pelo próprio líder (ver monta_texto_copia_mnr, chamada em
+    app.py na tela, que monta a lista pra copiar/colar nessa ressalva).
 
     ressalvas: lista opcional de dicts {"checkpoint": str, "texto": str,
     "fotos": [(nome, bytes), ...]} - vira uma aba 'Ressalvas' com o
@@ -430,7 +505,10 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
     Samuel em 24/09/2026: antes era só 1 foto, agora aceita várias -
     foto do Manifested/Bill of Lading, foto de avaria, etc., tudo no
     mesmo registro), pra registro/auditoria (ver
-    monta_texto_ressalva_padrao).
+    monta_texto_ressalva_padrao e monta_texto_copia_mnr). Ajuste
+    também em 24/09/2026: a ressalva virou um registro SÓ, feito no
+    final (depois do checkpoint de stow), em vez de uma por checkpoint -
+    ver tela_recebimento() em app.py.
 
     qtd_chegou: int opcional - a quantidade fisica digitada (contagem do
     turno inteiro). Ate 23/09/2026 isso era separado por hub (REC9/
@@ -441,7 +519,7 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
     confiar nela pra separar automaticamente REC9 de FOR3 - virou um
     numero unico de novo, registrado como uma linha logo abaixo do
     titulo."""
-    tem_situacao_real = any(_situacao_mais_recente(info) for info in por_rota.values())
+    tem_stow_real = any("situacao_stow" in info for info in por_rota.values())
 
     wb = openpyxl.Workbook()
 
@@ -455,86 +533,83 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
         ws[f"A{ws.max_row}"].font = Font(italic=True)
     ws.append([])
     cabecalho = ["Rota", "Pacotes", "Paradas"]
-    if tem_situacao_real:
-        cabecalho += ["Manifested", "Inducted", "Stowed ou além", "Não encontrado", "Confirmada?"]
+    if tem_stow_real:
+        cabecalho.append("Em Stow (pronto p/ expedir)")
     ws.append(cabecalho)
     for cel in ws[ws.max_row]:
         cel.font = Font(bold=True)
         cel.fill = PatternFill(fill_type="solid", fgColor="FFE8E8E8")
 
-    total_pacotes = total_paradas = 0
+    total_pacotes = total_paradas = total_em_stow = 0
     for rota in sorted(por_rota):
         info = por_rota[rota]
         linha = [rota, info["pacotes"], info["paradas"]]
-        if tem_situacao_real:
-            sit = _situacao_mais_recente(info)
+        if tem_stow_real:
+            sit = info.get("situacao_stow")
             if sit:
-                linha += [
-                    len(sit["manifested"]), len(sit["inducted"]), len(sit["stowed_ou_alem"]),
-                    len(sit["nao_encontrado"]) + len(sit["sem_state"]),
-                    "Sim" if sit["confirmada"] else "Não",
-                ]
+                em_stow = len(sit["stowed_ou_alem"])
+                linha.append(em_stow)
+                total_em_stow += em_stow
             else:
-                linha += ["-", "-", "-", "-", "-"]
+                linha.append("-")
         ws.append(linha)
         total_pacotes += info["pacotes"]
         total_paradas += info["paradas"]
-    ws.append(["TOTAL", total_pacotes, total_paradas])
+    linha_total = ["TOTAL", total_pacotes, total_paradas]
+    if tem_stow_real:
+        linha_total.append(total_em_stow)
+    ws.append(linha_total)
     for cel in ws[ws.max_row]:
         cel.font = Font(bold=True)
 
     ws.column_dimensions["A"].width = 14
     ws.column_dimensions["B"].width = 12
     ws.column_dimensions["C"].width = 12
-    if tem_situacao_real:
-        for letra in ["D", "E", "F", "G", "H"]:
-            ws.column_dimensions[letra].width = 14
+    if tem_stow_real:
+        ws.column_dimensions["D"].width = 22
 
-    if tem_situacao_real:
-        ws_pend = wb.create_sheet("Pendentes")
-        ws_pend.append(["Rota", "Situação", "TBR"])
-        for cel in ws_pend[1]:
+    # Aba "Detalhe paradas" - reformulada a pedido do Samuel em
+    # 24/09/2026: (1) antes só listava as paradas com mais de 1 pacote
+    # (a aba usava "detalhe_paradas", que é só um resumo de conferência)
+    # - agora usa "todas_paradas" e lista TODOS os TBR da rota, inclusive
+    # parada de 1 pacote só; (2) cada rota vira uma "tabelinha" separada
+    # (cabeçalho da rota + cabeçalho de coluna próprios), em vez de uma
+    # tabela só com todas as rotas misturadas numa coluna "Rota"; (3) o
+    # número da "Parada" fica numa coluna, repetido pra cada TBR daquela
+    # parada, pra ficar fácil ver quais pacotes caem juntos sem precisar
+    # ler o endereço inteiro de novo em cada linha.
+    ws2 = wb.create_sheet("Detalhe paradas")
+    ws2.column_dimensions["A"].width = 10
+    ws2.column_dimensions["B"].width = 48
+    ws2.column_dimensions["C"].width = 16
+
+    linha = 1
+    for rota in sorted(por_rota):
+        info = por_rota[rota]
+        ws2.cell(row=linha, column=1, value=f"Rota {rota} — {info['pacotes']} pacotes / {info['paradas']} paradas")
+        ws2.merge_cells(start_row=linha, start_column=1, end_row=linha, end_column=3)
+        cel_titulo = ws2.cell(row=linha, column=1)
+        cel_titulo.font = Font(bold=True, size=12)
+        cel_titulo.fill = PatternFill(fill_type="solid", fgColor="FFD9D9D9")
+        linha += 1
+
+        ws2.cell(row=linha, column=1, value="Parada")
+        ws2.cell(row=linha, column=2, value="Endereço")
+        ws2.cell(row=linha, column=3, value="TBR")
+        for col in range(1, 4):
+            cel = ws2.cell(row=linha, column=col)
             cel.font = Font(bold=True)
             cel.fill = PatternFill(fill_type="solid", fgColor="FFE8E8E8")
-        for rota in sorted(por_rota):
-            info = por_rota[rota]
-            sit = _situacao_mais_recente(info)
-            if not sit:
-                continue
-            # Rótulo do "manifested" muda de acordo com o checkpoint mais
-            # avançado que essa rota já tem (ver comentário sobre MNR
-            # acima, perto de categoriza_state_recebimento): só DEPOIS do
-            # stow já ter rodado é que "ainda em Manifested" vira sinal de
-            # possível MNR de verdade - antes disso (só indução feita) é
-            # normal, ainda não chegou a vez desse TBR.
-            rotulo_manifested = (
-                ROTULO_MNR_NAO_CARREGADO if "situacao_stow" in info else ROTULO_AGUARDANDO_INDUCAO
-            )
-            rotulos = {
-                "manifested": rotulo_manifested,
-                "inducted": "Induzido, falta armazenar (Inducted)",
-                "sem_state": "Achado no CSV mas sem State",
-                "nao_encontrado": ROTULO_MNR_NAO_MANIFESTADO,
-            }
-            for chave, rotulo in rotulos.items():
-                for tbr in sit[chave]:
-                    ws_pend.append([rota, rotulo, tbr])
-        ws_pend.column_dimensions["A"].width = 10
-        ws_pend.column_dimensions["B"].width = 55
-        ws_pend.column_dimensions["C"].width = 18
+        linha += 1
 
-    ws2 = wb.create_sheet("Detalhe paradas")
-    ws2.append(["Rota", "Endereço (chave usada p/ agrupar)", "Qtd pacotes", "TBRs"])
-    for cel in ws2[1]:
-        cel.font = Font(bold=True)
-        cel.fill = PatternFill(fill_type="solid", fgColor="FFE8E8E8")
-    for rota in sorted(por_rota):
-        for d in por_rota[rota]["detalhe_paradas"]:
-            ws2.append([rota, d["endereco_base"], d["qtd_pacotes"], ", ".join(d["tbrs"])])
-    ws2.column_dimensions["A"].width = 10
-    ws2.column_dimensions["B"].width = 42
-    ws2.column_dimensions["C"].width = 12
-    ws2.column_dimensions["D"].width = 60
+        for num_parada, d in enumerate(info["todas_paradas"], start=1):
+            for tbr in d["tbrs"]:
+                ws2.cell(row=linha, column=1, value=num_parada)
+                ws2.cell(row=linha, column=2, value=d["endereco_exibicao"])
+                ws2.cell(row=linha, column=3, value=tbr)
+                linha += 1
+
+        linha += 1  # linha em branco separando a próxima rota
 
     if ressalvas:
         ws_res = wb.create_sheet("Ressalvas")
