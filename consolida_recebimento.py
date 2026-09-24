@@ -65,6 +65,7 @@ import unicodedata
 import openpyxl
 from openpyxl.drawing.image import Image as ExcelImage
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 from PIL import Image as PILImage
 
 from consolida_rotas import _carrega_planilha, detecta_data_do_arquivo, detecta_node_do_nome
@@ -481,6 +482,31 @@ def monta_texto_copia_mnr(por_rota):
     return "\n\n".join(blocos)
 
 
+def _estima_altura_linha_ressalva(texto, largura_caracteres=95, altura_por_linha=15, minimo=90):
+    """Estima a altura (em pontos) que a linha da aba 'Ressalvas' precisa
+    pra mostrar o texto INTEIRO, sem cortar (bug real visto pelo Samuel
+    em 24/09/2026: a altura ficava travada em 90 - dava pra ver só as
+    primeiras linhas de uma ressalva mais longa, tipo quando junta a
+    lista empilhada de vários TBR possível MNR, o resto ficava
+    escondido).
+
+    openpyxl NAO calcula altura de linha automaticamente pra texto com
+    wrap - precisa estimar na mão quantas linhas o texto vai ocupar
+    (contando tanto as quebras de linha explícitas quanto o texto
+    "dando a volta" dentro da largura da célula) e converter em altura.
+
+    largura_caracteres: quantos caracteres cabem numa linha antes do
+    Excel quebrar sozinho - estimativa conservadora (arredonda PRA
+    CIMA o número de linhas) pra largura das colunas A:F mescladas
+    (A tem width=70 + 5 colunas no width padrão) - melhor estimar
+    linha a mais (sobra espaço em branco) do que a menos (corta
+    texto)."""
+    linhas = 0
+    for linha_texto in (texto or "").split("\n"):
+        linhas += max(1, -(-len(linha_texto) // largura_caracteres))  # divisao arredondando pra cima
+    return max(linhas * altura_por_linha + 20, minimo)
+
+
 def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_chegou=None):
     """Monta o Excel final: aba 'Resumo' (pacotes/paradas/Em Stow por
     rota, com total no fim) + aba 'Detalhe paradas' (todos os TBR da
@@ -621,26 +647,40 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
             ws_res.cell(row=linha_atual, column=1, value=r["texto"])
             ws_res.cell(row=linha_atual, column=1).alignment = Alignment(wrap_text=True, vertical="top")
             ws_res.merge_cells(start_row=linha_atual, start_column=1, end_row=linha_atual, end_column=6)
-            ws_res.row_dimensions[linha_atual].height = 90
+            ws_res.row_dimensions[linha_atual].height = _estima_altura_linha_ressalva(r["texto"])
             linha_atual += 2
             # Varias fotos/documentos por ressalva (ajuste do Samuel em
-            # 24/09/2026 - antes era só 1): cada um vira uma imagem
-            # embutida (PDF não é imagem pro Pillow abrir direto - cai
-            # no "except" e só anota o nome do arquivo, mesmo fallback
-            # de antes).
+            # 24/09/2026 - antes era só 1, depois ficavam uma embaixo da
+            # outra - agora ficam LADO A LADO, andando de coluna em vez
+            # de linha, só descendo de linha depois de colocar TODAS as
+            # fotos dessa ressalva). PDF não é imagem pro Pillow abrir
+            # direto - cai no "except" e só anota o nome do arquivo,
+            # mesmo fallback de antes.
+            #
+            # Começa na coluna B (não A) porque a coluna A é a larga
+            # (width 70, lá embaixo) usada pro texto da ressalva - só a
+            # partir da B que a largura de coluna é a padrão do Excel
+            # (~64px), que é a base usada pra calcular quantas colunas
+            # cada foto ocupa (PX_POR_COLUNA) e não sobrepor a próxima.
+            PX_POR_COLUNA = 64
+            coluna_atual = 2
+            maior_altura_px = 0
             for nome_foto, dados_foto in (r.get("fotos") or []):
                 try:
                     img_pil = PILImage.open(io.BytesIO(dados_foto))
-                    img_pil.thumbnail((500, 700))
+                    img_pil.thumbnail((320, 480))
                     img_buffer = io.BytesIO()
                     img_pil.convert("RGB").save(img_buffer, format="PNG")
                     img_buffer.seek(0)
                     img_excel = ExcelImage(img_buffer)
-                    ws_res.add_image(img_excel, f"A{linha_atual}")
-                    linha_atual += int(img_pil.height / 18) + 3
+                    ancora = f"{get_column_letter(coluna_atual)}{linha_atual}"
+                    ws_res.add_image(img_excel, ancora)
+                    coluna_atual += int(img_pil.width / PX_POR_COLUNA) + 1
+                    maior_altura_px = max(maior_altura_px, img_pil.height)
                 except Exception:
-                    ws_res.cell(row=linha_atual, column=1, value=f"(não consegui anexar {nome_foto})")
-                    linha_atual += 2
+                    ws_res.cell(row=linha_atual, column=coluna_atual, value=f"(não consegui anexar {nome_foto})")
+                    coluna_atual += 2
+            linha_atual += (int(maior_altura_px / 18) + 3) if maior_altura_px else 2
             linha_atual += 2
         ws_res.column_dimensions["A"].width = 70
 
