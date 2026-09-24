@@ -425,9 +425,12 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
     ainda nao chegou em Stowed.
 
     ressalvas: lista opcional de dicts {"checkpoint": str, "texto": str,
-    "foto_nome": str|None, "foto_bytes": bytes|None} - vira uma aba
-    'Ressalvas' com o texto e a foto do Manifested embutida (quando
-    tiver), pra registro/auditoria (ver monta_texto_ressalva_padrao).
+    "fotos": [(nome, bytes), ...]} - vira uma aba 'Ressalvas' com o
+    texto e CADA foto/documento embutido (0, 1 ou varias - ajuste do
+    Samuel em 24/09/2026: antes era só 1 foto, agora aceita várias -
+    foto do Manifested/Bill of Lading, foto de avaria, etc., tudo no
+    mesmo registro), pra registro/auditoria (ver
+    monta_texto_ressalva_padrao).
 
     qtd_chegou: int opcional - a quantidade fisica digitada (contagem do
     turno inteiro). Ate 23/09/2026 isso era separado por hub (REC9/
@@ -545,9 +548,14 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
             ws_res.merge_cells(start_row=linha_atual, start_column=1, end_row=linha_atual, end_column=6)
             ws_res.row_dimensions[linha_atual].height = 90
             linha_atual += 2
-            if r.get("foto_bytes"):
+            # Varias fotos/documentos por ressalva (ajuste do Samuel em
+            # 24/09/2026 - antes era só 1): cada um vira uma imagem
+            # embutida (PDF não é imagem pro Pillow abrir direto - cai
+            # no "except" e só anota o nome do arquivo, mesmo fallback
+            # de antes).
+            for nome_foto, dados_foto in (r.get("fotos") or []):
                 try:
-                    img_pil = PILImage.open(io.BytesIO(r["foto_bytes"]))
+                    img_pil = PILImage.open(io.BytesIO(dados_foto))
                     img_pil.thumbnail((500, 700))
                     img_buffer = io.BytesIO()
                     img_pil.convert("RGB").save(img_buffer, format="PNG")
@@ -556,7 +564,7 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
                     ws_res.add_image(img_excel, f"A{linha_atual}")
                     linha_atual += int(img_pil.height / 18) + 3
                 except Exception:
-                    ws_res.cell(row=linha_atual, column=1, value=f"(não consegui anexar a foto {r.get('foto_nome', '')})")
+                    ws_res.cell(row=linha_atual, column=1, value=f"(não consegui anexar {nome_foto})")
                     linha_atual += 2
             linha_atual += 2
         ws_res.column_dimensions["A"].width = 70
