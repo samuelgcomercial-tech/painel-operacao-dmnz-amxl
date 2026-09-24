@@ -146,6 +146,39 @@ def vai_para(tela):
     st.session_state.tela = tela
 
 
+def _mostra_diferenca_checkpoint(rotulo_avancado, avancado, qtd_chegou):
+    """Mostra o resultado de comparar 'quantos já avançaram nesse
+    checkpoint' com 'quantos foram informados que chegaram' - usado nos
+    dois checkpoints (indução/stow). Bug corrigido em 24/09/2026
+    (apontado pelo Samuel com print real): quando avancado > qtd_chegou
+    (ex: CSV mostra 307 induzido mas só foi digitado 298), a conta
+    'faltam' dava NEGATIVO ("faltam -9"), sem sentido nenhum - esse caso
+    normalmente não é pacote sumido, é o número digitado que ficou
+    desatualizado (esquecido de um teste/turno anterior). Agora tem uma
+    mensagem própria pra esse caso, avisando pra conferir o número
+    digitado em vez de sugerir uma "falta" que não existe.
+
+    Devolve a diferença (qtd_chegou - avancado) pra quem chamou decidir
+    o que mostrar a mais (ex: a ressalva do líder só faz sentido quando
+    realmente falta gente induzir/armazenar, ou seja diferenca > 0)."""
+    diferenca = qtd_chegou - avancado
+    if diferenca == 0:
+        st.success(f"Bateu — {avancado} {rotulo_avancado} (ou além) = {qtd_chegou} que chegaram.")
+    elif diferenca > 0:
+        st.warning(
+            f"Não bateu ainda — {avancado} {rotulo_avancado} (ou além) vs {qtd_chegou} "
+            f"que chegaram (faltam {diferenca})."
+        )
+    else:
+        st.warning(
+            f"Tem MAIS TBR {rotulo_avancado} (ou além) do que a quantidade informada — "
+            f"{avancado} vs {qtd_chegou} que chegaram ({-diferenca} a mais). Confere se o "
+            'número em "Quantos pacotes chegaram" está certo (pode ter ficado de um '
+            "teste ou turno anterior, por exemplo)."
+        )
+    return diferenca
+
+
 # ------------------------------------------------------------------
 # TELA INICIAL — escolha entre os dois painéis (Fechamento x
 # Recebimento). Cada um é independente: Recebimento nem pede nome (não
@@ -1575,27 +1608,22 @@ def tela_recebimento():
             st.caption("Sobe o CSV acima pra ver o progresso de indução.")
         else:
             induzido = soma_inducidos_ou_alem(por_rota)
-            diferenca = qtd_chegou - induzido
             manifested_pendentes = [
                 tbr for info in por_rota.values()
                 for tbr in info.get("situacao_inducao", {}).get("manifested", [])
             ]
-            if diferenca == 0:
-                st.success(f"Bateu — {induzido} induzido(s) (ou além) = {qtd_chegou} que chegaram.")
-            else:
-                st.warning(
-                    f"Não bateu ainda — {induzido} induzido(s) (ou além) vs {qtd_chegou} "
-                    f"que chegaram (faltam {diferenca})."
-                )
-                if manifested_pendentes:
-                    with st.expander("Quem ainda está Manifested (falta induzir)"):
-                        st.write(", ".join(manifested_pendentes))
+            diferenca = _mostra_diferenca_checkpoint("induzido(s)", induzido, qtd_chegou)
+            if diferenca != 0 and manifested_pendentes:
+                with st.expander("Quem ainda está Manifested (falta induzir)"):
+                    st.write(", ".join(manifested_pendentes))
 
-                # Ressalva do líder (ajuste do Samuel em 21/09/2026): se
-                # depois de reconferir o físico o número continuar
-                # diferente do Manifested do Bill of Lading, o líder
-                # registra uma ressalva (texto + foto opcional) e segue
-                # mesmo assim, sem travar.
+            # Ressalva do líder (ajuste do Samuel em 21/09/2026): SÓ faz
+            # sentido quando realmente falta induzir gente (diferenca >
+            # 0) - se diferenca < 0 (mais induzido do que o informado),
+            # o problema é outro (número digitado desatualizado, ver
+            # _mostra_diferenca_checkpoint acima), não "o físico veio a
+            # menos", então não faz sentido oferecer essa ressalva aqui.
+            if diferenca > 0:
                 ressalva = st.session_state.recebimento_ressalva_inducao
                 if ressalva["confirmada"]:
                     st.info("📋 Ressalva registrada — seguindo mesmo com a diferença.")
@@ -1612,11 +1640,25 @@ def tela_recebimento():
                             "mesmo), registra abaixo pra seguir mesmo assim."
                         )
                         texto_padrao = monta_texto_ressalva_padrao(node_texto, qtd_chegou, induzido)
+                        # Bug corrigido em 24/09/2026 (visto de verdade
+                        # pelo Samuel): a key dessa caixa era FIXA
+                        # ("texto_area_ressalva") - depois que o
+                        # Streamlit guarda um valor pra essa key, o
+                        # parametro value= é IGNORADO nos reruns
+                        # seguintes, mesmo que qtd_chegou/induzido
+                        # mudem (ex: subiu outro CSV com número
+                        # diferente) - a caixa ficava mostrando o texto
+                        # padrão antigo, calculado com o numero de
+                        # ANTES. Botando os numeros atuais na key, uma
+                        # key nova (= caixa nova, com o valor novo)
+                        # nasce toda vez que os numeros mudam - só
+                        # continua com o texto digitado enquanto os
+                        # numeros nao mudarem.
                         texto_ressalva = st.text_area(
                             "Texto da ressalva",
                             value=ressalva["texto"] or texto_padrao,
                             height=180,
-                            key="texto_area_ressalva",
+                            key=f"texto_area_ressalva_{qtd_chegou}_{induzido}",
                         )
                         foto_manifested = st.file_uploader(
                             "Foto do Manifested (Bill of Lading) — opcional",
@@ -1651,7 +1693,6 @@ def tela_recebimento():
             st.caption("Sobe o CSV acima pra ver o progresso de stow.")
         else:
             stowed = soma_stowed_ou_alem(por_rota)
-            diferenca = qtd_chegou - stowed
             inducted_pendentes = [
                 tbr for info in por_rota.values()
                 for tbr in info.get("situacao_stow", {}).get("inducted", [])
@@ -1660,16 +1701,10 @@ def tela_recebimento():
                 tbr for info in por_rota.values()
                 for tbr in info.get("situacao_stow", {}).get("manifested", [])
             ]
-            if diferenca == 0:
-                st.success(f"Bateu — {stowed} armazenado(s) (ou além) = {qtd_chegou} que chegaram.")
-            else:
-                st.warning(
-                    f"Não bateu ainda — {stowed} armazenado(s) vs {qtd_chegou} que "
-                    f"chegaram (faltam {diferenca})."
-                )
-                if inducted_pendentes:
-                    with st.expander("Quem ainda está Inducted (falta armazenar)"):
-                        st.write(", ".join(inducted_pendentes))
+            diferenca = _mostra_diferenca_checkpoint("armazenado(s)", stowed, qtd_chegou)
+            if diferenca != 0 and inducted_pendentes:
+                with st.expander("Quem ainda está Inducted (falta armazenar)"):
+                    st.write(", ".join(inducted_pendentes))
 
             # Possível MNR (ajuste do Samuel em 23/09/2026): se um TBR
             # AINDA está em Manifested/Arrived/Received mesmo depois do
