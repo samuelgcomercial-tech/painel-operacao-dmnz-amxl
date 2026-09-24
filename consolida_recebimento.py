@@ -604,14 +604,30 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
     # número da "Parada" fica numa coluna, repetido pra cada TBR daquela
     # parada, pra ficar fácil ver quais pacotes caem juntos sem precisar
     # ler o endereço inteiro de novo em cada linha.
+    #
+    # BUG real encontrado pelo Samuel em 24/09/2026 (rota AX8, "Rua das
+    # Embarcações"): a coluna "Endereço" mostrava o mesmo texto (do
+    # PRIMEIRO TBR do grupo) pra TODOS os TBR daquela parada - inclusive
+    # quando o complemento de cada um era bem diferente (bloco/apto
+    # diferente: "Bl 08 Apto 408", "AP 403 BLOCO 7", "Bl 29 ap 202" etc,
+    # 5 blocos diferentes do mesmo condomínio agrupados como 1 parada só
+    # porque a CHAVE de agrupamento - rua+número, antes da vírgula - é
+    # igual pros 5). A chave de agrupamento continua a mesma (é a regra
+    # documentada no topo do arquivo), mas a coluna "Endereço" agora
+    # mostra o endereço de CADA TBR individualmente (com html.unescape,
+    # mas sem tirar acento/complemento - ver endereco_para_exibicao),
+    # em vez do endereço de um TBR só repetido pra todo mundo do grupo.
     ws2 = wb.create_sheet("Detalhe paradas")
     ws2.column_dimensions["A"].width = 10
-    ws2.column_dimensions["B"].width = 48
+    ws2.column_dimensions["B"].width = 55
     ws2.column_dimensions["C"].width = 16
 
     linha = 1
     for rota in sorted(por_rota):
         info = por_rota[rota]
+        endereco_por_tbr = {
+            item["tbr"]: endereco_para_exibicao(item["endereco"]) for item in info["itens"]
+        }
         ws2.cell(row=linha, column=1, value=f"Rota {rota} — {info['pacotes']} pacotes / {info['paradas']} paradas")
         ws2.merge_cells(start_row=linha, start_column=1, end_row=linha, end_column=3)
         cel_titulo = ws2.cell(row=linha, column=1)
@@ -631,7 +647,7 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
         for num_parada, d in enumerate(info["todas_paradas"], start=1):
             for tbr in d["tbrs"]:
                 ws2.cell(row=linha, column=1, value=num_parada)
-                ws2.cell(row=linha, column=2, value=d["endereco_exibicao"])
+                ws2.cell(row=linha, column=2, value=endereco_por_tbr.get(tbr, d["endereco_exibicao"]))
                 ws2.cell(row=linha, column=3, value=tbr)
                 linha += 1
 
