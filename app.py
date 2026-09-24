@@ -145,6 +145,11 @@ if "recebimento_ressalva_inducao" not in st.session_state:
     st.session_state.recebimento_ressalva_inducao = {"texto": "", "confirmada": False, "fotos": []}
 if "recebimento_tem_na" not in st.session_state:
     st.session_state.recebimento_tem_na = False
+if "recebimento_estado_bruto_stow" not in st.session_state:
+    # State BRUTO (texto exato do SCC) de cada TBR do último CSV de
+    # stow subido - usado só pra mostrar no aviso de possível MNR (ver
+    # tela_recebimento) qual state o SCC mostra pra cada TBR parado.
+    st.session_state.recebimento_estado_bruto_stow = {}
 
 
 def vai_para(tela):
@@ -1457,6 +1462,7 @@ def tela_recebimento():
             st.session_state.recebimento_rota_selecionada = None
             st.session_state.recebimento_ressalva_inducao = {"texto": "", "confirmada": False, "fotos": []}
             st.session_state.recebimento_tem_na = False
+            st.session_state.recebimento_estado_bruto_stow = {}
             st.rerun()
     else:
         arquivo_rotas = st.file_uploader(
@@ -1702,6 +1708,18 @@ def tela_recebimento():
             else:
                 _avisa_se_parece_csv_fechamento(por_rota, linhas_csv_stow)
                 cruza_com_state_scc(por_rota, linhas_csv_stow, chave="situacao_stow")
+                # Guarda o State BRUTO de cada TBR desse CSV (pedido do
+                # Samuel em 24/09/2026) - cruza_com_state_scc só guarda
+                # a CATEGORIA (manifested/inducted/...), não o texto
+                # exato do SCC. Usado no aviso de possível MNR logo
+                # abaixo, pra mostrar não só "esse TBR não avançou" mas
+                # o state exato que o SCC mostra pra ele (ex: "Arrived"),
+                # já que às vezes é útil ver se é o MESMO state de antes
+                # (não mudou nada) ou um state diferente.
+                st.session_state.recebimento_estado_bruto_stow = {
+                    (l.get("Tracking ID") or "").strip(): (l.get("State") or "").strip()
+                    for l in linhas_csv_stow
+                }
 
         tem_situacao_stow = any("situacao_stow" in info for info in por_rota.values())
         if not tem_situacao_stow:
@@ -1732,7 +1750,9 @@ def tela_recebimento():
             if manifested_pendentes_stow:
                 st.warning(f"{len(manifested_pendentes_stow)} TBR(s) — {ROTULO_MNR_NAO_CARREGADO}")
                 with st.expander("Possíveis MNR (TBRs)"):
-                    st.write(", ".join(manifested_pendentes_stow))
+                    estado_bruto_stow = st.session_state.get("recebimento_estado_bruto_stow") or {}
+                    for tbr in manifested_pendentes_stow:
+                        st.write(f"**{tbr}** — state atual no SCC: {estado_bruto_stow.get(tbr, '?')}")
 
     # ------------------------------------------------------------
     # Painel final por rota — cards clicáveis (pedido do Samuel em
