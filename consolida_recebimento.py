@@ -198,7 +198,7 @@ def consolida_recebimento(arquivo, nome_arquivo):
 #   1. Roteirizado mas NUNCA aparece em nenhum CSV do SCC do
 #      checkpoint (nem inducao, nem stow) - nunca chegou a ser
 #      manifestado pro hub de verdade. E o "nao_encontrado" de
-#      cruza_com_state_scc/soma_por_hub.
+#      cruza_com_state_scc.
 #   2. Aparece no CSV (foi manifestado) mas continua preso em
 #      Manifested/Arrived/Received mesmo DEPOIS do checkpoint de stow
 #      ja ter rodado - so significa "nao chegou a ser carregado" quando
@@ -298,48 +298,18 @@ def cruza_com_state_scc(por_rota, linhas_csv, chave="situacao_real"):
     return por_rota
 
 
-def soma_por_hub(linhas_csv, hubs):
-    """Conta o progresso de indução/stow POR HUB, usando a coluna
-    'Source' que o próprio CSV do SCC já traz (REC9/FOR3 por TBR) - em
-    vez de depender do arquivo de rotas, que NÃO distingue hub (ajuste
-    do Samuel em 23/09/2026: cada hub manda um veículo separado, em
-    horários bem diferentes - viu-se em dois Bill of Lading reais com
-    mais de 4h de diferença entre a saída de um e a saída do outro).
-
-    Isso existe porque a checagem por ROTA (cruza_com_state_scc) mistura
-    os dois hubs - o que é correto pro total combinado, mas não ajuda a
-    responder "o REC9 já terminou?" enquanto o FOR3 ainda nem chegou (e
-    vice-versa). Como o progresso aqui vem DIRETO do CSV mais recente
-    (não acumula entre uploads), quem chama deve guardar o resultado em
-    session_state pra não perder o progresso de um hub quando o outro
-    hub for atualizado depois (ver tela_recebimento em app.py).
-
-    Devolve dict hub -> {"manifested": [tbr, ...] (ainda não induzido),
-    "inducted_apenas": [tbr, ...] (induzido, falta armazenar),
-    "inducido_ou_alem": int, "stowed_ou_alem": int, "sem_state": int} -
-    TBRs cujo Source não bate com nenhum hub conhecido (ex.: NA,
-    "CUSTOMER_ADDRESS") são ignorados, não contam em nenhum hub."""
-    resultado = {
-        hub: {"manifested": [], "inducted_apenas": [], "inducido_ou_alem": 0, "stowed_ou_alem": 0, "sem_state": 0}
-        for hub in hubs
-    }
-    for linha in linhas_csv:
-        hub = (linha.get("Source") or "").strip()
-        if hub not in resultado:
-            continue
-        tbr = (linha.get("Tracking ID") or "").strip()
-        categoria = categoriza_state_recebimento(linha.get("State"))
-        if categoria == "manifested":
-            resultado[hub]["manifested"].append(tbr)
-        elif categoria == "sem_state":
-            resultado[hub]["sem_state"] += 1
-        elif categoria == "inducted":
-            resultado[hub]["inducted_apenas"].append(tbr)
-            resultado[hub]["inducido_ou_alem"] += 1
-        elif categoria == "stowed_ou_alem":
-            resultado[hub]["inducido_ou_alem"] += 1
-            resultado[hub]["stowed_ou_alem"] += 1
-    return resultado
+# Removida em 24/09/2026 (pedido do Samuel): existia aqui uma
+# soma_por_hub(linhas_csv, hubs), que contava indução/stow separado por
+# REC9/FOR3 usando a coluna "Source" do CSV do SCC. Motivo da remoção:
+# "Source" não é um rótulo fixo de hub de origem - é o local do ÚLTIMO
+# SCAN (um TBR já Delivered aparece com Source "CUSTOMER_ADDRESS", não
+# o hub de onde saiu - visto de verdade num CSV real: 6 TBR assim + 1
+# com "CGH7", nenhum de outro hub de verdade). Num arquivo com REC9 e
+# FOR3 misturados não tem como saber a qual dos dois um TBR com Source
+# "sujo" pertence - contar diferente por hub em cima dessa coluna não
+# era fiel à realidade. A checagem por ROTA (cruza_com_state_scc, logo
+# acima) já cobre o caso combinado e continua sendo a única forma de
+# checagem real usada pelo app.
 
 
 # Limiar (%) acima do qual avisamos que o CSV subido num checkpoint
@@ -443,7 +413,7 @@ def _situacao_mais_recente(info):
     return info.get("situacao_stow") or info.get("situacao_inducao")
 
 
-def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_por_hub=None):
+def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_chegou=None):
     """Monta o Excel final: aba 'Resumo' (pacotes/paradas por rota, com
     total no fim) + aba 'Detalhe paradas' (so as paradas com mais de 1
     pacote, pra dar pra conferir na mao se o agrupamento fez sentido -
@@ -459,13 +429,15 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
     'Ressalvas' com o texto e a foto do Manifested embutida (quando
     tiver), pra registro/auditoria (ver monta_texto_ressalva_padrao).
 
-    qtd_por_hub: dict opcional {hub: quantidade} (ex.: {"REC9": 314,
-    "FOR3": 210}) - a quantidade fisica digitada por hub (ajuste do
-    Samuel em 23/09/2026: o node recebe manifesto de hubs separados,
-    cada um por veiculo proprio). Nao tem como quebrar isso por ROTA no
-    Excel (o arquivo de rotas nao distingue hub por TBR), entao entra
-    como uma linha de registro logo abaixo do titulo, so pra ficar
-    documentado no arquivo final quanto veio de cada hub."""
+    qtd_chegou: int opcional - a quantidade fisica digitada (contagem do
+    turno inteiro). Ate 23/09/2026 isso era separado por hub (REC9/
+    FOR3), mas o Samuel pediu pra tirar essa separacao em 24/09/2026: a
+    coluna "Source" do CSV do SCC nao e um rotulo fixo de hub de origem
+    (e o local do ULTIMO SCAN - um TBR ja Delivered aparece com Source
+    "CUSTOMER_ADDRESS", nao o hub de onde saiu), entao nao da pra
+    confiar nela pra separar automaticamente REC9 de FOR3 - virou um
+    numero unico de novo, registrado como uma linha logo abaixo do
+    titulo."""
     tem_situacao_real = any(_situacao_mais_recente(info) for info in por_rota.values())
 
     wb = openpyxl.Workbook()
@@ -475,10 +447,8 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
     titulo = f"Painel Recebimento - {node or '?'} - {data_arquivo.strftime('%d/%m/%Y') if data_arquivo else '?'}"
     ws.append([titulo])
     ws["A1"].font = Font(bold=True, size=13)
-    if qtd_por_hub:
-        total_hubs = sum(qtd_por_hub.values())
-        linha_hubs = " · ".join(f"{hub}: {qtd}" for hub, qtd in qtd_por_hub.items())
-        ws.append([f"Recebido por hub — {linha_hubs} · Total: {total_hubs}"])
+    if qtd_chegou:
+        ws.append([f"Recebido: {qtd_chegou} pacotes"])
         ws[f"A{ws.max_row}"].font = Font(italic=True)
     ws.append([])
     cabecalho = ["Rota", "Pacotes", "Paradas"]
