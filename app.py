@@ -28,6 +28,7 @@ from consolida_recebimento import (
     consolida_recebimento,
     cruza_com_state_scc,
     gera_workbook_recebimento,
+    monta_texto_copia_mnr,
     monta_texto_ressalva_padrao,
     percentual_delivered,
     soma_inducidos_ou_alem,
@@ -126,7 +127,7 @@ if "recebimento_qtd_chegou" not in st.session_state:
     st.session_state.recebimento_qtd_chegou = 0
 if "recebimento_rota_selecionada" not in st.session_state:
     st.session_state.recebimento_rota_selecionada = None
-if "recebimento_ressalva_inducao" not in st.session_state:
+if "recebimento_ressalva" not in st.session_state:
     # Retirada a divisão por hub (pedido do Samuel em 24/09/2026): a
     # coluna "Source" do CSV do SCC não é um rótulo fixo de hub de
     # origem, é o local do ÚLTIMO SCAN - um pacote Delivered aparece
@@ -142,7 +143,13 @@ if "recebimento_ressalva_inducao" not in st.session_state:
     # só): serve pra anexar mais de uma imagem/documento - foto do
     # Manifested (Bill of Lading), foto de pacote avariado, e afins -
     # tudo junto no mesmo registro de ressalva, sem limite de 1.
-    st.session_state.recebimento_ressalva_inducao = {"texto": "", "confirmada": False, "fotos": []}
+    #
+    # Renomeada de "recebimento_ressalva_inducao" pra
+    # "recebimento_ressalva" (ajuste do Samuel em 24/09/2026): não é
+    # mais uma caixa exclusiva do Checkpoint 1 (indução) - virou uma
+    # única ressalva "final", registrada depois do Checkpoint 2 (stow) -
+    # ver tela_recebimento().
+    st.session_state.recebimento_ressalva = {"texto": "", "confirmada": False, "fotos": []}
 if "recebimento_tem_na" not in st.session_state:
     st.session_state.recebimento_tem_na = False
 if "recebimento_estado_bruto_stow" not in st.session_state:
@@ -1460,7 +1467,7 @@ def tela_recebimento():
             st.session_state.recebimento_confirmado = False
             st.session_state.recebimento_qtd_chegou = 0
             st.session_state.recebimento_rota_selecionada = None
-            st.session_state.recebimento_ressalva_inducao = {"texto": "", "confirmada": False, "fotos": []}
+            st.session_state.recebimento_ressalva = {"texto": "", "confirmada": False, "fotos": []}
             st.session_state.recebimento_tem_na = False
             st.session_state.recebimento_estado_bruto_stow = {}
             st.rerun()
@@ -1593,6 +1600,13 @@ def tela_recebimento():
     )
     qtd_chegou = st.session_state.recebimento_qtd_chegou
 
+    # Valores default (ajuste do Samuel em 24/09/2026: a ressalva saiu
+    # daqui de dentro do Checkpoint 1 e virou uma única caixa "final",
+    # depois do Checkpoint 2 - precisa desses dois sobreviverem pra lá
+    # mesmo se o Checkpoint 1 ainda não tiver CSV subido).
+    diferenca_inducao = None
+    induzido = 0
+
     if qtd_chegou > 0:
         st.markdown("**Checkpoint 1 — pós-indução**")
         # SEM restrição de tipo (type=None) de propósito - mesmo motivo
@@ -1623,77 +1637,10 @@ def tela_recebimento():
                 tbr for info in por_rota.values()
                 for tbr in info.get("situacao_inducao", {}).get("manifested", [])
             ]
-            diferenca = _mostra_diferenca_checkpoint("induzido(s)", induzido, qtd_chegou)
-            if diferenca != 0 and manifested_pendentes:
+            diferenca_inducao = _mostra_diferenca_checkpoint("induzido(s)", induzido, qtd_chegou)
+            if diferenca_inducao != 0 and manifested_pendentes:
                 with st.expander("Quem ainda está Manifested (falta induzir)"):
                     st.write(", ".join(manifested_pendentes))
-
-            # Ressalva/anexos do líder (ajuste do Samuel em 21/09/2026,
-            # ampliado em 24/09/2026): SEMPRE disponível agora, não só
-            # quando falta induzir - o Samuel quer poder anexar foto do
-            # Manifested (Bill of Lading), foto de pacote avariado e
-            # afins mesmo quando bateu certinho ou veio a mais. Aceita
-            # VÁRIAS fotos/documentos de uma vez (antes era só 1).
-            ressalva = st.session_state.recebimento_ressalva_inducao
-            if ressalva["confirmada"]:
-                qtd_fotos = len(ressalva["fotos"])
-                st.info(
-                    "📋 Ressalva registrada"
-                    + (f" — {qtd_fotos} foto(s)/documento(s) anexado(s)." if qtd_fotos else ".")
-                )
-                with st.expander("Ver ressalva registrada"):
-                    st.text(ressalva["texto"])
-                    for nome, _ in ressalva["fotos"]:
-                        st.caption(f"📎 {nome}")
-                if st.button("✏️ Editar ressalva"):
-                    st.session_state.recebimento_ressalva_inducao["confirmada"] = False
-                    st.rerun()
-            else:
-                with st.expander("📋 Registrar ressalva / anexar fotos (opcional)"):
-                    st.caption(
-                        "Pra registrar qualquer observação do recebimento — número que não bateu "
-                        "com o Manifested, pacote avariado, ou qualquer outra coisa que precise "
-                        "ficar documentada — com foto(s) se precisar. Não trava nada, é só registro."
-                    )
-                    # Só pré-preenche o texto padrão ("veio a menos...")
-                    # quando realmente falta induzir gente (diferenca >
-                    # 0) - se bateu ou veio a mais, esse texto ficaria
-                    # errado, então a caixa nasce vazia e o líder escreve
-                    # livremente (ex: sobre uma avaria).
-                    texto_padrao = (
-                        monta_texto_ressalva_padrao(node_texto, qtd_chegou, induzido) if diferenca > 0 else ""
-                    )
-                    # Bug corrigido em 24/09/2026 (visto de verdade pelo
-                    # Samuel): a key dessa caixa era FIXA
-                    # ("texto_area_ressalva") - depois que o Streamlit
-                    # guarda um valor pra essa key, o parametro value= é
-                    # IGNORADO nos reruns seguintes, mesmo que
-                    # qtd_chegou/induzido mudem (ex: subiu outro CSV com
-                    # número diferente) - a caixa ficava mostrando o
-                    # texto padrão antigo, calculado com o numero de
-                    # ANTES. Botando os numeros atuais na key, uma key
-                    # nova (= caixa nova, com o valor novo) nasce toda
-                    # vez que os numeros mudam - só continua com o texto
-                    # digitado enquanto os numeros nao mudarem.
-                    texto_ressalva = st.text_area(
-                        "Texto (observação, ressalva, o que for)",
-                        value=ressalva["texto"] or texto_padrao,
-                        height=180,
-                        key=f"texto_area_ressalva_{qtd_chegou}_{induzido}",
-                    )
-                    fotos_manifested = st.file_uploader(
-                        "Fotos/documentos (Manifested, avaria, etc.) — opcional, pode escolher várias",
-                        type=["jpg", "jpeg", "png", "pdf"],
-                        accept_multiple_files=True,
-                        key="upload_fotos_ressalva",
-                    )
-                    if st.button("✅ Confirmar e seguir mesmo assim"):
-                        st.session_state.recebimento_ressalva_inducao["texto"] = texto_ressalva
-                        st.session_state.recebimento_ressalva_inducao["confirmada"] = True
-                        st.session_state.recebimento_ressalva_inducao["fotos"] = [
-                            (arq.name, arq.getvalue()) for arq in fotos_manifested
-                        ]
-                        st.rerun()
 
         st.markdown("**Checkpoint 2 — pós-stow**")
         st.caption("Sempre disponível — não precisa esperar o Checkpoint 1 bater pra conferir o stow.")
@@ -1745,14 +1692,94 @@ def tela_recebimento():
             # carregado de verdade (avaria, extravio ou falta de tempo
             # no hub de origem) - diferente de estar em Manifested só
             # no checkpoint de indução (isso aí é normal, só ainda não
-            # chegou a vez). Só avisa, não trava - a ressalva acima já
-            # cobre seguir em frente mesmo com essa diferença.
+            # chegou a vez). Só avisa, não trava - a ressalva final logo
+            # abaixo já cobre seguir em frente mesmo com essa diferença.
             if manifested_pendentes_stow:
                 st.warning(f"{len(manifested_pendentes_stow)} TBR(s) — {ROTULO_MNR_NAO_CARREGADO}")
                 with st.expander("Possíveis MNR (TBRs)"):
                     estado_bruto_stow = st.session_state.get("recebimento_estado_bruto_stow") or {}
                     for tbr in manifested_pendentes_stow:
                         st.write(f"**{tbr}** — state atual no SCC: {estado_bruto_stow.get(tbr, '?')}")
+
+        # Ressalva final (ajuste do Samuel em 24/09/2026): antes ficava
+        # dentro do Checkpoint 1, sempre disponível - agora é uma caixa
+        # SÓ, no final da checagem (depois do Checkpoint 2, "quando
+        # entra tudo em stow"), e substitui a aba "Pendentes" do Excel:
+        # em vez de só listar os TBR possível MNR num Excel à parte, o
+        # próprio líder detalha a análise de cada um aqui - igual já
+        # funciona na Etapa 1 do Fechamento (lista pra copiar com o
+        # ícone do st.code) - e a lista já vem empilhada, um TBR por
+        # linha, cada um com ":" no final, pronta pro líder completar.
+        st.markdown("**Ressalva final**")
+        texto_copia_mnr = monta_texto_copia_mnr(por_rota)
+        if texto_copia_mnr:
+            st.caption(
+                "Possíveis MNR (o que não vai ser expedido pela manhã) — ícone de copiar "
+                "no canto do quadro pega a lista inteira de uma vez:"
+            )
+            st.code(texto_copia_mnr, language=None)
+
+        ressalva = st.session_state.recebimento_ressalva
+        if ressalva["confirmada"]:
+            qtd_fotos = len(ressalva["fotos"])
+            st.info(
+                "📋 Ressalva registrada"
+                + (f" — {qtd_fotos} foto(s)/documento(s) anexado(s)." if qtd_fotos else ".")
+            )
+            with st.expander("Ver ressalva registrada"):
+                st.text(ressalva["texto"])
+                for nome, _ in ressalva["fotos"]:
+                    st.caption(f"📎 {nome}")
+            if st.button("✏️ Editar ressalva"):
+                st.session_state.recebimento_ressalva["confirmada"] = False
+                st.rerun()
+        else:
+            # Texto padrão junta duas coisas, se existirem: (1) o aviso
+            # de "veio a menos que o Manifested" da indução (mesma regra
+            # de antes: só pré-preenche se realmente faltou); (2) a
+            # lista empilhada dos possíveis MNR do stow, pro líder
+            # escrever a análise depois de cada ":".
+            partes_texto_padrao = []
+            if diferenca_inducao and diferenca_inducao > 0:
+                partes_texto_padrao.append(monta_texto_ressalva_padrao(node_texto, qtd_chegou, induzido))
+            if texto_copia_mnr:
+                partes_texto_padrao.append(texto_copia_mnr)
+            texto_padrao = "\n\n".join(partes_texto_padrao)
+
+            with st.expander(
+                "📋 Registrar ressalva / anexar fotos (opcional)", expanded=bool(texto_padrao)
+            ):
+                st.caption(
+                    "Pra registrar a análise final do turno — número que não bateu com o "
+                    "Manifested, detalhe de cada possível MNR, pacote avariado, ou qualquer "
+                    "outra coisa que precise ficar documentada — com foto(s) se precisar. "
+                    "Não trava nada, é só registro."
+                )
+                # Mesmo fix de key dinâmica de antes (bug real visto pelo
+                # Samuel em 24/09/2026: key fixa faz o Streamlit ignorar
+                # o value= nos reruns seguintes) - agora usando um hash
+                # do texto padrão inteiro como key, já que ele pode mudar
+                # por vários motivos diferentes (indução, stow, novo CSV)
+                # e listar cada motivo à mão na key ia ficando frágil.
+                texto_ressalva = st.text_area(
+                    "Texto (observação, ressalva, o que for)",
+                    value=ressalva["texto"] or texto_padrao,
+                    height=220,
+                    key=f"texto_area_ressalva_{hash(texto_padrao)}",
+                )
+                fotos_ressalva = st.file_uploader(
+                    "Fotos/documentos (Manifested, avaria, etc.) — opcional, pode escolher várias",
+                    type=["jpg", "jpeg", "png", "pdf"],
+                    accept_multiple_files=True,
+                    key="upload_fotos_ressalva",
+                )
+                if st.button("✅ Confirmar e seguir mesmo assim"):
+                    st.session_state.recebimento_ressalva["texto"] = texto_ressalva
+                    st.session_state.recebimento_ressalva["confirmada"] = True
+                    st.session_state.recebimento_ressalva["fotos"] = [
+                        (arq.name, arq.getvalue()) for arq in fotos_ressalva
+                    ]
+                    st.rerun()
 
     # ------------------------------------------------------------
     # Painel final por rota — cards clicáveis (pedido do Samuel em
@@ -1769,7 +1796,7 @@ def tela_recebimento():
         st.caption(
             f"{rotas_confirmadas} de {len(por_rota)} rota(s) confirmada(s) — 100% Stowed, "
             "considerando só quem chegou (quem nunca apareceu no CSV não trava a confirmação, "
-            "só entra como possível MNR — ver aba Pendentes no Excel final)."
+            "só entra como possível MNR — detalhe na ressalva final, acima)."
         )
 
     rotas_ordenadas = sorted(por_rota)
@@ -1803,10 +1830,14 @@ def tela_recebimento():
         )
 
     ressalvas = []
-    ressalva = st.session_state.recebimento_ressalva_inducao
+    ressalva = st.session_state.recebimento_ressalva
     if ressalva["confirmada"]:
         ressalvas.append({
-            "checkpoint": "Pós-indução",
+            # Rotulada como "Pós-stow" (era "Pós-indução" antes do
+            # ajuste do Samuel em 24/09/2026 que moveu a ressalva pro
+            # final, depois do Checkpoint 2) - é o registro final do
+            # turno, feito quando tudo já devia estar em Stow.
+            "checkpoint": "Pós-stow",
             "texto": ressalva["texto"],
             "fotos": ressalva["fotos"],  # lista de (nome, bytes) - pode ter 0, 1 ou várias
         })
@@ -1815,9 +1846,8 @@ def tela_recebimento():
     st.caption(
         "Confere a prévia acima antes de gerar o arquivo — o Excel final vai ter "
         "essa mesma tabela (aba Resumo, com a quantidade recebida registrada no topo) "
-        "+ o detalhe do agrupamento (aba Detalhe paradas) "
-        "+ a checagem real, se algum checkpoint já foi feito"
-        + (" + a ressalva registrada (com a foto, se tiver)." if ressalvas else ".")
+        "+ o detalhe do agrupamento (aba Detalhe paradas)"
+        + (" + a ressalva final registrada (com foto(s), se tiver)." if ressalvas else ".")
     )
     if st.button("✅ Confirmar e gerar arquivo", type="primary"):
         st.session_state.recebimento_confirmado = True
