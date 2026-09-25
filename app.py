@@ -27,12 +27,14 @@ from consolida_recebimento import (
     ROTULO_MNR_NAO_CARREGADO,
     consolida_recebimento,
     cruza_com_state_scc,
+    extrai_notas_ressalva_por_tbr,
     gera_workbook_recebimento,
     monta_texto_copia_mnr,
     monta_texto_ressalva_padrao,
     percentual_delivered,
     soma_inducidos_ou_alem,
     soma_stowed_ou_alem,
+    status_por_tbr,
 )
 from base_das import (
     extrai_das_do_dia,
@@ -1820,9 +1822,31 @@ def tela_recebimento():
     rota_sel = st.session_state.recebimento_rota_selecionada
     if rota_sel and rota_sel in por_rota:
         st.markdown(f"#### {rota_sel} — TBRs e endereços")
+        # Coluna "Status" (pedido do Samuel em 25/09/2026): TBR a TBR,
+        # o motivo de quem ainda não tá em Stow - possível MNR (avaria/
+        # extravio), achado sem State, ou só induzido e faltando
+        # armazenar - ver status_por_tbr em consolida_recebimento.py.
+        #
+        # Ajuste do mesmo dia: se o líder já escreveu uma nota
+        # ESPECÍFICA pra aquele TBR na ressalva (ex: "TBR431835710: PCT
+        # FOI RECEBIDO EM SLS9"), mostra ELA em vez do rótulo genérico -
+        # a nota da ressalva sempre tem prioridade (ver
+        # extrai_notas_ressalva_por_tbr); o rótulo genérico só aparece
+        # pra quem ainda não tem nota nenhuma escrita.
+        status_tbrs = status_por_tbr(por_rota[rota_sel])
+        notas_ressalva = extrai_notas_ressalva_por_tbr(st.session_state.recebimento_ressalva.get("texto", ""))
         st.dataframe(
             [
-                {"Parada": item["stop"], "TBR": item["tbr"], "Endereço": item["endereco"]}
+                {
+                    "Parada": item["stop"],
+                    "TBR": item["tbr"],
+                    "Endereço": item["endereco"],
+                    "Status": (
+                        f"📋 {notas_ressalva[item['tbr']]}"
+                        if item["tbr"] in notas_ressalva
+                        else status_tbrs.get(item["tbr"], "— (sem checkpoint ainda)")
+                    ),
+                }
                 for item in por_rota[rota_sel]["itens"]
             ],
             use_container_width=True,
