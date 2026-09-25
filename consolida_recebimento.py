@@ -340,6 +340,47 @@ def cruza_com_state_scc(por_rota, linhas_csv, chave="situacao_real"):
     return por_rota
 
 
+def status_por_tbr(info):
+    """Devolve dict tbr -> rótulo de status (pedido do Samuel em
+    25/09/2026): no card 'Ver TBRs / endereços' da tela, quer ver TBR a
+    TBR o motivo de quem ainda não tá em Stow - avaria/extravio (MNR),
+    ou só induzido e ainda faltando armazenar.
+
+    Usa o checkpoint de STOW quando essa rota já tem ('situacao_stow') -
+    é o mais preciso, e só nesse ponto "ainda em Manifested" quer dizer
+    MNR de verdade (ver comentário grande sobre MNR, perto de
+    categoriza_state_recebimento). Se a rota só tem o de INDUÇÃO ainda,
+    usa esse, com rótulos mais brandos (nesse ponto é normal alguém
+    ainda estar Manifested - a indução pode não ter terminado). Se a
+    rota não tem NENHUM checkpoint ainda, devolve {} (chamador decide o
+    que mostrar - ver tela_recebimento em app.py)."""
+    sit = info.get("situacao_stow")
+    if sit:
+        rotulos = {
+            "stowed_ou_alem": "✅ Stowed (ou além) — ok, vai ser expedido",
+            "inducted": "⏳ Induzido, falta armazenar (Inducted)",
+            "manifested": f"⚠️ {ROTULO_MNR_NAO_CARREGADO}",
+            "sem_state": "⚠️ Achado no CSV mas sem State",
+            "nao_encontrado": f"⚠️ {ROTULO_MNR_NAO_MANIFESTADO}",
+        }
+    else:
+        sit = info.get("situacao_inducao")
+        if not sit:
+            return {}
+        rotulos = {
+            "stowed_ou_alem": "✅ Induzido (ou além) — ok",
+            "inducted": "✅ Inducted — ok, falta só o checkpoint de stow confirmar",
+            "manifested": "⏳ Ainda não induzido (normal, indução em andamento)",
+            "sem_state": "⚠️ Achado no CSV mas sem State",
+            "nao_encontrado": "— Ainda não apareceu no CSV de indução",
+        }
+    status = {}
+    for categoria, rotulo in rotulos.items():
+        for tbr in sit.get(categoria, []):
+            status[tbr] = rotulo
+    return status
+
+
 # Removida em 24/09/2026 (pedido do Samuel): existia aqui uma
 # soma_por_hub(linhas_csv, hubs), que contava indução/stow separado por
 # REC9/FOR3 usando a coluna "Source" do CSV do SCC. Motivo da remoção:
@@ -486,6 +527,31 @@ def monta_texto_copia_mnr(por_rota):
     if sem_state:
         blocos.append("Achado no CSV mas sem State:\n" + "\n".join(f"{tbr}: " for tbr in sem_state))
     return "\n\n".join(blocos)
+
+
+_PADRAO_LINHA_NOTA_TBR = re.compile(r"^\s*(TBR\d+)\s*:\s*(.*)$")
+
+
+def extrai_notas_ressalva_por_tbr(texto):
+    """Lê o texto da ressalva (já escrito pelo líder, no formato
+    empilhado 'TBR123: explicação' que monta_texto_copia_mnr pré-
+    preenche) e devolve um dict tbr -> nota, só com os TBR que o líder
+    realmente completou (ignora 'TBR123: ' vazio, que é só o padrão
+    ainda não preenchido).
+
+    Ajuste do Samuel em 25/09/2026: no card 'Ver TBRs / endereços' da
+    tela, ele NÃO quer só o rótulo genérico de status (tipo 'Possível
+    MNR...') quando já existe uma explicação específica escrita por ele
+    mesmo na ressalva pra aquele TBR (ex: 'TBR431835710: PCT FOI
+    RECEBIDO EM SLS9') - nesse caso é a nota dele que deve aparecer,
+    não o rótulo genérico (ver status_por_tbr, e o uso dos dois juntos
+    em tela_recebimento, em app.py)."""
+    notas = {}
+    for linha in (texto or "").split("\n"):
+        m = _PADRAO_LINHA_NOTA_TBR.match(linha)
+        if m and m.group(2).strip():
+            notas[m.group(1)] = m.group(2).strip()
+    return notas
 
 
 def _estima_altura_linha_ressalva(texto, largura_caracteres=95, altura_por_linha=15, minimo=90):
