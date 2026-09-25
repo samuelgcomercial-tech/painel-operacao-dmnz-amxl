@@ -82,8 +82,14 @@ def normaliza_endereco_base(endereco):
     entidade HTML tipo "jer&ocirc;nimo c&acirc;mara" em vez de "jerônimo
     câmara" - sem o unescape, essas letras ficam intactas (ja sao ascii)
     e o endereco vira uma chave DIFERENTE de "avenida jeronimo camara",
-    quebrando o agrupamento em 2 paradas quando era 1 so)."""
+    quebrando o agrupamento em 2 paradas quando era 1 so).
+
+    Tambem tira "/" (outro bug real encontrado pelo Samuel em 24/09/2026,
+    rota AX10): "S/N" (sem numero) e "SN" sao a MESMA coisa, mas sem
+    tirar a barra viravam 2 chaves diferentes ("rua x s/n" x "rua x sn"),
+    quebrando o agrupamento igual ao bug da entidade HTML."""
     base = html.unescape(endereco or "").split(",")[0]
+    base = base.replace("/", "")
     base = unicodedata.normalize("NFKD", base).encode("ascii", "ignore").decode("ascii")
     base = re.sub(r"\s+", " ", base).strip().lower()
     return base
