@@ -29,10 +29,7 @@ from consolida_recebimento import (
     cruza_com_state_scc,
     extrai_notas_ressalva_por_tbr,
     gera_workbook_recebimento,
-    monta_texto_copia_mnr,
-    monta_texto_ressalva_padrao,
     percentual_delivered,
-    soma_inducidos_ou_alem,
     soma_stowed_ou_alem,
     status_por_tbr,
 )
@@ -125,8 +122,6 @@ if "recebimento_resultado" not in st.session_state:
     st.session_state.recebimento_resultado = None
 if "recebimento_confirmado" not in st.session_state:
     st.session_state.recebimento_confirmado = False
-if "recebimento_qtd_chegou" not in st.session_state:
-    st.session_state.recebimento_qtd_chegou = 0
 if "recebimento_rota_selecionada" not in st.session_state:
     st.session_state.recebimento_rota_selecionada = None
 if "recebimento_ressalva" not in st.session_state:
@@ -163,39 +158,6 @@ if "recebimento_estado_bruto_stow" not in st.session_state:
 
 def vai_para(tela):
     st.session_state.tela = tela
-
-
-def _mostra_diferenca_checkpoint(rotulo_avancado, avancado, qtd_chegou):
-    """Mostra o resultado de comparar 'quantos já avançaram nesse
-    checkpoint' com 'quantos foram informados que chegaram' - usado nos
-    dois checkpoints (indução/stow). Bug corrigido em 24/09/2026
-    (apontado pelo Samuel com print real): quando avancado > qtd_chegou
-    (ex: CSV mostra 307 induzido mas só foi digitado 298), a conta
-    'faltam' dava NEGATIVO ("faltam -9"), sem sentido nenhum - esse caso
-    normalmente não é pacote sumido, é o número digitado que ficou
-    desatualizado (esquecido de um teste/turno anterior). Agora tem uma
-    mensagem própria pra esse caso, avisando pra conferir o número
-    digitado em vez de sugerir uma "falta" que não existe.
-
-    Devolve a diferença (qtd_chegou - avancado) pra quem chamou decidir
-    o que mostrar a mais (ex: a ressalva do líder só faz sentido quando
-    realmente falta gente induzir/armazenar, ou seja diferenca > 0)."""
-    diferenca = qtd_chegou - avancado
-    if diferenca == 0:
-        st.success(f"Bateu — {avancado} {rotulo_avancado} (ou além) = {qtd_chegou} que chegaram.")
-    elif diferenca > 0:
-        st.warning(
-            f"Não bateu ainda — {avancado} {rotulo_avancado} (ou além) vs {qtd_chegou} "
-            f"que chegaram (faltam {diferenca})."
-        )
-    else:
-        st.warning(
-            f"Tem MAIS TBR {rotulo_avancado} (ou além) do que a quantidade informada — "
-            f"{avancado} vs {qtd_chegou} que chegaram ({-diferenca} a mais). Confere se o "
-            'número em "Quantos pacotes chegaram" está certo (pode ter ficado de um '
-            "teste ou turno anterior, por exemplo)."
-        )
-    return diferenca
 
 
 # ------------------------------------------------------------------
@@ -1467,7 +1429,6 @@ def tela_recebimento():
         if st.button("🔁 Trocar arquivo de rotas"):
             st.session_state.recebimento_resultado = None
             st.session_state.recebimento_confirmado = False
-            st.session_state.recebimento_qtd_chegou = 0
             st.session_state.recebimento_rota_selecionada = None
             st.session_state.recebimento_ressalva = {"texto": "", "confirmada": False, "fotos": []}
             st.session_state.recebimento_tem_na = False
@@ -1575,213 +1536,122 @@ def tela_recebimento():
             st.code("\n".join(lista_final_tbrs), language=None, height=150)
 
     # ------------------------------------------------------------
-    # Checagem real, combinada (voltou a ser um total ÚNICO em
-    # 24/09/2026, a pedido do Samuel - tinha uma versão anterior que
-    # separava REC9/FOR3 automaticamente pela coluna "Source" do CSV do
-    # SCC, mas o Samuel notou que "Source" não é um rótulo fixo de hub
-    # de origem - é o local do ÚLTIMO SCAN, e vem "CUSTOMER_ADDRESS"
-    # pra quem já foi entregue (visto de verdade: 6 TBR Delivered com
-    # Source CUSTOMER_ADDRESS e 1 com CGH7 - nenhum de outro hub de
-    # verdade, só o scan mais recente registrado em local diferente).
-    # Num arquivo real com os dois hubs misturados não tem como saber a
-    # qual dos dois um TBR com Source "sujo" pertence - separar por hub
-    # em cima dessa coluna não é fiel à realidade. Sem escolha de hub,
-    # sem botão - um número só, um checkpoint só.
+    # Checagem de stow (pedido do Samuel em 08/10/2026): o fluxo ficou só
+    # com UM checkpoint - o pós-stow. Saíram a tela de indução e o campo
+    # "quantos pacotes chegaram" (a comparação físico x sistema deixou de
+    # ser feita aqui). Não perde nada de verdade: nenhum pacote pula
+    # etapa, então quem aparece Stowed já foi induzido; e quem ficou
+    # parado em Inducted aparece aqui mesmo como "falta armazenar".
+    # ------------------------------------------------------------
     st.divider()
-    st.markdown("### Checagem de recebimento (opcional)")
+    st.markdown("### Checagem de stow (opcional)")
     st.caption(
-        "A tabela acima é o PLANO — só vira confiável de verdade quando os pacotes que "
-        "chegaram já passaram pelo fluxo físico (Manifested → Inducted → Stowed)."
+        "A tabela acima é o PLANO — só vira confiável de verdade quando os pacotes já "
+        "foram armazenados (Stowed). Sobe o CSV do SCC exportado depois do stow."
     )
 
-    st.session_state.recebimento_qtd_chegou = st.number_input(
-        "Quantos pacotes chegaram? (contagem física, turno inteiro)",
-        min_value=0,
-        step=1,
-        value=st.session_state.recebimento_qtd_chegou,
+    # SEM restrição de tipo (type=None) de propósito - mesmo motivo da
+    # Etapa 1 do Fechamento (seletor do Android/Chrome às vezes bloqueia o
+    # próprio CSV exportado do SCC por causa do "tipo" que o navegador
+    # salvou no download) - e também aceita o CSV salvo sem querer como
+    # .xlsx (ver le_csv_scc em base_das.py, que detecta os dois formatos
+    # pela assinatura do arquivo, não pela extensão).
+    csv_stow = st.file_uploader(
+        "CSV (ou Excel) do SCC pós-stow (Tracking ID + State)", type=None, key="upload_csv_stow"
     )
-    qtd_chegou = st.session_state.recebimento_qtd_chegou
-
-    # Valores default (ajuste do Samuel em 24/09/2026: a ressalva saiu
-    # daqui de dentro do Checkpoint 1 e virou uma única caixa "final",
-    # depois do Checkpoint 2 - precisa desses dois sobreviverem pra lá
-    # mesmo se o Checkpoint 1 ainda não tiver CSV subido).
-    diferenca_inducao = None
-    induzido = 0
-
-    if qtd_chegou > 0:
-        st.markdown("**Checkpoint 1 — pós-indução**")
-        # SEM restrição de tipo (type=None) de propósito - mesmo motivo
-        # da Etapa 1 do Fechamento (seletor do Android/Chrome às vezes
-        # bloqueia o próprio CSV exportado do SCC por causa do "tipo"
-        # que o navegador salvou no download) - e também aceita o CSV
-        # salvo sem querer como .xlsx (visto de verdade em 23/09/2026 -
-        # ver le_csv_scc em base_das.py, que detecta os dois formatos
-        # pela assinatura do arquivo, não pela extensão).
-        csv_inducao = st.file_uploader(
-            "CSV (ou Excel) do SCC pós-indução (Tracking ID + State)", type=None, key="upload_csv_inducao"
-        )
-        if csv_inducao is not None:
-            try:
-                linhas_csv_inducao = le_csv_scc(csv_inducao)
-            except Exception as e:
-                st.error(f"Não consegui ler esse CSV: {e}")
-            else:
-                _avisa_se_parece_csv_fechamento(por_rota, linhas_csv_inducao)
-                cruza_com_state_scc(por_rota, linhas_csv_inducao, chave="situacao_inducao")
-
-        tem_situacao_inducao = any("situacao_inducao" in info for info in por_rota.values())
-        if not tem_situacao_inducao:
-            st.caption("Sobe o CSV acima pra ver o progresso de indução.")
+    if csv_stow is not None:
+        try:
+            linhas_csv_stow = le_csv_scc(csv_stow)
+        except Exception as e:
+            st.error(f"Não consegui ler esse CSV: {e}")
         else:
-            induzido = soma_inducidos_ou_alem(por_rota)
-            manifested_pendentes = [
-                tbr for info in por_rota.values()
-                for tbr in info.get("situacao_inducao", {}).get("manifested", [])
-            ]
-            diferenca_inducao = _mostra_diferenca_checkpoint("induzido(s)", induzido, qtd_chegou)
-            if diferenca_inducao != 0 and manifested_pendentes:
-                with st.expander("Quem ainda está Manifested (falta induzir)"):
-                    st.write(", ".join(manifested_pendentes))
+            _avisa_se_parece_csv_fechamento(por_rota, linhas_csv_stow)
+            cruza_com_state_scc(por_rota, linhas_csv_stow, chave="situacao_stow")
+            # Guarda o State BRUTO (texto exato do SCC) de cada TBR desse
+            # CSV - cruza_com_state_scc só guarda a CATEGORIA. Usado no
+            # aviso de possível MNR logo abaixo, pra mostrar o state exato
+            # que o SCC mostra pra cada TBR parado (ex: "Arrived").
+            st.session_state.recebimento_estado_bruto_stow = {
+                (l.get("Tracking ID") or "").strip(): (l.get("State") or "").strip()
+                for l in linhas_csv_stow
+            }
 
-        st.markdown("**Checkpoint 2 — pós-stow**")
-        st.caption("Sempre disponível — não precisa esperar o Checkpoint 1 bater pra conferir o stow.")
-        csv_stow = st.file_uploader(
-            "CSV (ou Excel) do SCC pós-stow (Tracking ID + State)", type=None, key="upload_csv_stow"
+    tem_situacao_stow = any("situacao_stow" in info for info in por_rota.values())
+    if not tem_situacao_stow:
+        st.caption("Sobe o CSV acima pra ver o progresso de stow.")
+    else:
+        total_plano = sum(info["pacotes"] for info in por_rota.values())
+        stowed = soma_stowed_ou_alem(por_rota)
+        st.info(f"{stowed} de {total_plano} TBR(s) do plano já estão em Stowed (ou além).")
+
+        inducted_pendentes = [
+            tbr for info in por_rota.values()
+            for tbr in info.get("situacao_stow", {}).get("inducted", [])
+        ]
+        manifested_pendentes_stow = [
+            tbr for info in por_rota.values()
+            for tbr in info.get("situacao_stow", {}).get("manifested", [])
+        ]
+        if inducted_pendentes:
+            with st.expander(f"Quem ainda está Inducted (falta armazenar) — {len(inducted_pendentes)}"):
+                st.write(", ".join(inducted_pendentes))
+
+        # Possível MNR (ajuste do Samuel em 23/09/2026): se um TBR AINDA
+        # está em Manifested/Arrived/Received mesmo depois do stow, ele
+        # não chegou a ser carregado de verdade (avaria, extravio ou
+        # falta de tempo no hub de origem). Só avisa, não trava e não
+        # exige justificativa de ninguém.
+        if manifested_pendentes_stow:
+            st.warning(f"{len(manifested_pendentes_stow)} TBR(s) — {ROTULO_MNR_NAO_CARREGADO}")
+            with st.expander("Possíveis MNR (TBRs)"):
+                estado_bruto_stow = st.session_state.get("recebimento_estado_bruto_stow") or {}
+                for tbr in manifested_pendentes_stow:
+                    st.write(f"**{tbr}** — state atual no SCC: {estado_bruto_stow.get(tbr, '?')}")
+
+    # Ressalva (opcional): caixa de texto + fotos/documentos. Sem lista
+    # pré-preenchida e sem nenhuma justificativa obrigatória (pedido do
+    # Samuel em 08/10/2026) - o usuário escreve só o que quiser.
+    st.markdown("**Ressalva (opcional)**")
+    ressalva = st.session_state.recebimento_ressalva
+    if ressalva["confirmada"]:
+        qtd_fotos = len(ressalva["fotos"])
+        st.info(
+            "📋 Ressalva registrada"
+            + (f" — {qtd_fotos} foto(s)/documento(s) anexado(s)." if qtd_fotos else ".")
         )
-        if csv_stow is not None:
-            try:
-                linhas_csv_stow = le_csv_scc(csv_stow)
-            except Exception as e:
-                st.error(f"Não consegui ler esse CSV: {e}")
-            else:
-                _avisa_se_parece_csv_fechamento(por_rota, linhas_csv_stow)
-                cruza_com_state_scc(por_rota, linhas_csv_stow, chave="situacao_stow")
-                # Guarda o State BRUTO de cada TBR desse CSV (pedido do
-                # Samuel em 24/09/2026) - cruza_com_state_scc só guarda
-                # a CATEGORIA (manifested/inducted/...), não o texto
-                # exato do SCC. Usado no aviso de possível MNR logo
-                # abaixo, pra mostrar não só "esse TBR não avançou" mas
-                # o state exato que o SCC mostra pra ele (ex: "Arrived"),
-                # já que às vezes é útil ver se é o MESMO state de antes
-                # (não mudou nada) ou um state diferente.
-                st.session_state.recebimento_estado_bruto_stow = {
-                    (l.get("Tracking ID") or "").strip(): (l.get("State") or "").strip()
-                    for l in linhas_csv_stow
-                }
-
-        tem_situacao_stow = any("situacao_stow" in info for info in por_rota.values())
-        if not tem_situacao_stow:
-            st.caption("Sobe o CSV acima pra ver o progresso de stow.")
-        else:
-            stowed = soma_stowed_ou_alem(por_rota)
-            inducted_pendentes = [
-                tbr for info in por_rota.values()
-                for tbr in info.get("situacao_stow", {}).get("inducted", [])
-            ]
-            manifested_pendentes_stow = [
-                tbr for info in por_rota.values()
-                for tbr in info.get("situacao_stow", {}).get("manifested", [])
-            ]
-            diferenca = _mostra_diferenca_checkpoint("armazenado(s)", stowed, qtd_chegou)
-            if diferenca != 0 and inducted_pendentes:
-                with st.expander("Quem ainda está Inducted (falta armazenar)"):
-                    st.write(", ".join(inducted_pendentes))
-
-            # Possível MNR (ajuste do Samuel em 23/09/2026): se um TBR
-            # AINDA está em Manifested/Arrived/Received mesmo depois do
-            # checkpoint de STOW já ter rodado, ele não chegou a ser
-            # carregado de verdade (avaria, extravio ou falta de tempo
-            # no hub de origem) - diferente de estar em Manifested só
-            # no checkpoint de indução (isso aí é normal, só ainda não
-            # chegou a vez). Só avisa, não trava - a ressalva final logo
-            # abaixo já cobre seguir em frente mesmo com essa diferença.
-            if manifested_pendentes_stow:
-                st.warning(f"{len(manifested_pendentes_stow)} TBR(s) — {ROTULO_MNR_NAO_CARREGADO}")
-                with st.expander("Possíveis MNR (TBRs)"):
-                    estado_bruto_stow = st.session_state.get("recebimento_estado_bruto_stow") or {}
-                    for tbr in manifested_pendentes_stow:
-                        st.write(f"**{tbr}** — state atual no SCC: {estado_bruto_stow.get(tbr, '?')}")
-
-        # Ressalva final (ajuste do Samuel em 24/09/2026): antes ficava
-        # dentro do Checkpoint 1, sempre disponível - agora é uma caixa
-        # SÓ, no final da checagem (depois do Checkpoint 2, "quando
-        # entra tudo em stow"), e substitui a aba "Pendentes" do Excel:
-        # em vez de só listar os TBR possível MNR num Excel à parte, o
-        # próprio líder detalha a análise de cada um aqui - igual já
-        # funciona na Etapa 1 do Fechamento (lista pra copiar com o
-        # ícone do st.code) - e a lista já vem empilhada, um TBR por
-        # linha, cada um com ":" no final, pronta pro líder completar.
-        st.markdown("**Ressalva final**")
-        texto_copia_mnr = monta_texto_copia_mnr(por_rota)
-        if texto_copia_mnr:
+        with st.expander("Ver ressalva registrada"):
+            st.text(ressalva["texto"])
+            for nome, _ in ressalva["fotos"]:
+                st.caption(f"📎 {nome}")
+        if st.button("✏️ Editar ressalva"):
+            st.session_state.recebimento_ressalva["confirmada"] = False
+            st.rerun()
+    else:
+        with st.expander("📋 Registrar ressalva / anexar fotos (opcional)"):
             st.caption(
-                "Possíveis MNR (o que não vai ser expedido pela manhã) — ícone de copiar "
-                "no canto do quadro pega a lista inteira de uma vez:"
+                "Pra registrar o que precisar ficar documentado do turno — pacote avariado, "
+                "TBR com observação, ou qualquer outra coisa — com foto(s) se precisar. "
+                "Não trava nada, é só registro."
             )
-            st.code(texto_copia_mnr, language=None)
-
-        ressalva = st.session_state.recebimento_ressalva
-        if ressalva["confirmada"]:
-            qtd_fotos = len(ressalva["fotos"])
-            st.info(
-                "📋 Ressalva registrada"
-                + (f" — {qtd_fotos} foto(s)/documento(s) anexado(s)." if qtd_fotos else ".")
+            texto_ressalva = st.text_area(
+                "Texto (observação, ressalva, o que for)",
+                value=ressalva["texto"],
+                height=180,
+                key="texto_area_ressalva",
             )
-            with st.expander("Ver ressalva registrada"):
-                st.text(ressalva["texto"])
-                for nome, _ in ressalva["fotos"]:
-                    st.caption(f"📎 {nome}")
-            if st.button("✏️ Editar ressalva"):
-                st.session_state.recebimento_ressalva["confirmada"] = False
+            fotos_ressalva = st.file_uploader(
+                "Fotos/documentos (avaria, etc.) — opcional, pode escolher várias",
+                type=["jpg", "jpeg", "png", "pdf"],
+                accept_multiple_files=True,
+                key="upload_fotos_ressalva",
+            )
+            if st.button("✅ Confirmar ressalva"):
+                st.session_state.recebimento_ressalva["texto"] = texto_ressalva
+                st.session_state.recebimento_ressalva["confirmada"] = True
+                st.session_state.recebimento_ressalva["fotos"] = [
+                    (arq.name, arq.getvalue()) for arq in fotos_ressalva
+                ]
                 st.rerun()
-        else:
-            # Texto padrão junta duas coisas, se existirem: (1) o aviso
-            # de "veio a menos que o Manifested" da indução (mesma regra
-            # de antes: só pré-preenche se realmente faltou); (2) a
-            # lista empilhada dos possíveis MNR do stow, pro líder
-            # escrever a análise depois de cada ":".
-            partes_texto_padrao = []
-            if diferenca_inducao and diferenca_inducao > 0:
-                partes_texto_padrao.append(monta_texto_ressalva_padrao(node_texto, qtd_chegou, induzido))
-            if texto_copia_mnr:
-                partes_texto_padrao.append(texto_copia_mnr)
-            texto_padrao = "\n\n".join(partes_texto_padrao)
-
-            with st.expander(
-                "📋 Registrar ressalva / anexar fotos (opcional)", expanded=bool(texto_padrao)
-            ):
-                st.caption(
-                    "Pra registrar a análise final do turno — número que não bateu com o "
-                    "Manifested, detalhe de cada possível MNR, pacote avariado, ou qualquer "
-                    "outra coisa que precise ficar documentada — com foto(s) se precisar. "
-                    "Não trava nada, é só registro."
-                )
-                # Mesmo fix de key dinâmica de antes (bug real visto pelo
-                # Samuel em 24/09/2026: key fixa faz o Streamlit ignorar
-                # o value= nos reruns seguintes) - agora usando um hash
-                # do texto padrão inteiro como key, já que ele pode mudar
-                # por vários motivos diferentes (indução, stow, novo CSV)
-                # e listar cada motivo à mão na key ia ficando frágil.
-                texto_ressalva = st.text_area(
-                    "Texto (observação, ressalva, o que for)",
-                    value=ressalva["texto"] or texto_padrao,
-                    height=220,
-                    key=f"texto_area_ressalva_{hash(texto_padrao)}",
-                )
-                fotos_ressalva = st.file_uploader(
-                    "Fotos/documentos (Manifested, avaria, etc.) — opcional, pode escolher várias",
-                    type=["jpg", "jpeg", "png", "pdf"],
-                    accept_multiple_files=True,
-                    key="upload_fotos_ressalva",
-                )
-                if st.button("✅ Confirmar e seguir mesmo assim"):
-                    st.session_state.recebimento_ressalva["texto"] = texto_ressalva
-                    st.session_state.recebimento_ressalva["confirmada"] = True
-                    st.session_state.recebimento_ressalva["fotos"] = [
-                        (arq.name, arq.getvalue()) for arq in fotos_ressalva
-                    ]
-                    st.rerun()
 
     # ------------------------------------------------------------
     # Painel final por rota — cards clicáveis (pedido do Samuel em
@@ -1798,7 +1668,7 @@ def tela_recebimento():
         st.caption(
             f"{rotas_confirmadas} de {len(por_rota)} rota(s) confirmada(s) — 100% Stowed, "
             "considerando só quem chegou (quem nunca apareceu no CSV não trava a confirmação, "
-            "só entra como possível MNR — detalhe na ressalva final, acima)."
+            "só entra como possível MNR)."
         )
 
     rotas_ordenadas = sorted(por_rota)
@@ -1869,9 +1739,8 @@ def tela_recebimento():
     st.divider()
     st.caption(
         "Confere a prévia acima antes de gerar o arquivo — o Excel final vai ter "
-        "essa mesma tabela (aba Resumo, com a quantidade recebida registrada no topo) "
-        "+ o detalhe do agrupamento (aba Detalhe paradas)"
-        + (" + a ressalva final registrada (com foto(s), se tiver)." if ressalvas else ".")
+        "essa mesma tabela (aba Resumo) + o detalhe do agrupamento (aba Detalhe paradas)"
+        + (" + a ressalva registrada (com foto(s), se tiver)." if ressalvas else ".")
     )
     if st.button("✅ Confirmar e gerar arquivo", type="primary"):
         st.session_state.recebimento_confirmado = True
@@ -1880,7 +1749,6 @@ def tela_recebimento():
         excel_bytes = gera_workbook_recebimento(
             por_rota, node_texto, data_arquivo,
             ressalvas=ressalvas,
-            qtd_chegou=st.session_state.recebimento_qtd_chegou,
         )
         # Formato ddmmaaaa no nome do arquivo (ajuste do Samuel em
         # 24/09/2026 - antes era aaaammdd).
