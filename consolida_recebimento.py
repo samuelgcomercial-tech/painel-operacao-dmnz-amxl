@@ -283,9 +283,9 @@ def cruza_com_state_scc(por_rota, linhas_csv, chave="situacao_real"):
     o State transitorio - ver comentario acima).
 
     'chave': nome da chave onde guardar o resultado dentro de cada rota
-    - usado pra guardar a checagem da inducao ("situacao_inducao") e a
-    do stow ("situacao_stow") separadas, ja que sao dois momentos
-    diferentes do turno (ver PAINEL_RECEBIMENTO_WIZARD em app.py).
+    - hoje o app so usa "situacao_stow" (o checkpoint de inducao saiu do
+    fluxo em 08/10/2026); o parametro continua existindo pra nao mexer
+    na assinatura.
 
     Acrescenta em cada rota de por_rota a chave pedida:
         {
@@ -346,34 +346,21 @@ def status_por_tbr(info):
     TBR o motivo de quem ainda não tá em Stow - avaria/extravio (MNR),
     ou só induzido e ainda faltando armazenar.
 
-    Usa o checkpoint de STOW quando essa rota já tem ('situacao_stow') -
-    é o mais preciso, e só nesse ponto "ainda em Manifested" quer dizer
-    MNR de verdade (ver comentário grande sobre MNR, perto de
-    categoriza_state_recebimento). Se a rota só tem o de INDUÇÃO ainda,
-    usa esse, com rótulos mais brandos (nesse ponto é normal alguém
-    ainda estar Manifested - a indução pode não ter terminado). Se a
-    rota não tem NENHUM checkpoint ainda, devolve {} (chamador decide o
-    que mostrar - ver tela_recebimento em app.py)."""
+    Desde 08/10/2026 o fluxo só tem o checkpoint de STOW (a indução saiu
+    do Painel Recebimento a pedido do Samuel) - se a rota ainda não tem
+    esse checkpoint, devolve {} (chamador decide o que mostrar - ver
+    tela_recebimento em app.py). Só informativo: nenhum rótulo aqui
+    exige justificativa."""
     sit = info.get("situacao_stow")
-    if sit:
-        rotulos = {
-            "stowed_ou_alem": "✅ Stowed (ou além) — ok, vai ser expedido",
-            "inducted": "⏳ Induzido, falta armazenar (Inducted)",
-            "manifested": f"⚠️ {ROTULO_MNR_NAO_CARREGADO}",
-            "sem_state": "⚠️ Achado no CSV mas sem State",
-            "nao_encontrado": f"⚠️ {ROTULO_MNR_NAO_MANIFESTADO}",
-        }
-    else:
-        sit = info.get("situacao_inducao")
-        if not sit:
-            return {}
-        rotulos = {
-            "stowed_ou_alem": "✅ Induzido (ou além) — ok",
-            "inducted": "✅ Inducted — ok, falta só o checkpoint de stow confirmar",
-            "manifested": "⏳ Ainda não induzido (normal, indução em andamento)",
-            "sem_state": "⚠️ Achado no CSV mas sem State",
-            "nao_encontrado": "— Ainda não apareceu no CSV de indução",
-        }
+    if not sit:
+        return {}
+    rotulos = {
+        "stowed_ou_alem": "✅ Stowed (ou além) — ok, vai ser expedido",
+        "inducted": "⏳ Induzido, falta armazenar (Inducted)",
+        "manifested": f"⚠️ {ROTULO_MNR_NAO_CARREGADO}",
+        "sem_state": "⚠️ Achado no CSV mas sem State",
+        "nao_encontrado": f"⚠️ {ROTULO_MNR_NAO_MANIFESTADO}",
+    }
     status = {}
     for categoria, rotulo in rotulos.items():
         for tbr in sit.get(categoria, []):
@@ -435,25 +422,10 @@ def percentual_delivered(por_rota, linhas_csv):
     return (delivered / len(encontrados)) * 100, len(encontrados)
 
 
-def soma_inducidos_ou_alem(por_rota, chave="situacao_inducao"):
-    """Total (todas as rotas somadas) de TBR que ja passaram da etapa
-    Manifested - ou seja, ja estao Inducted ou mais adiante (Stowed,
-    etc). Usado pra comparar com o numero digitado a mao ("quantos
-    pacotes chegaram no manifesto de transporte") no checkpoint de
-    pos-inducao."""
-    total = 0
-    for info in por_rota.values():
-        sit = info.get(chave)
-        if sit:
-            total += len(sit["inducted"]) + len(sit["stowed_ou_alem"])
-    return total
-
-
 def soma_stowed_ou_alem(por_rota, chave="situacao_stow"):
     """Total (todas as rotas somadas) de TBR que ja estao Stowed (ou
-    mais adiante). Usado no checkpoint de pos-stow, comparado contra o
-    total confirmado na inducao (ninguem deveria "sumir" entre um
-    checkpoint e outro)."""
+    mais adiante) no checkpoint de pos-stow - usado na tela pra mostrar
+    "X de Y TBR(s) do plano ja estao em Stowed"."""
     total = 0
     for info in por_rota.values():
         sit = info.get(chave)
@@ -462,71 +434,13 @@ def soma_stowed_ou_alem(por_rota, chave="situacao_stow"):
     return total
 
 
-# --- Ressalva do líder (ajuste do Samuel em 21/09/2026) --------------
+# --- Ressalva (opcional) ----------------------------------------------
 #
-# Quando o Inducted vem MENOR que o Manifested (o numero digitado a
-# mao, vindo do Bill of Lading/manifesto de transporte de verdade - o
-# Samuel mandou foto de um), isso pode ser um erro de processo (faltou
-# induzir alguem) OU pode ser que o fisico realmente veio a menos do
-# que o proprio manifesto da Amazon diz (acontece: o caminhao chegou
-# com menos pacote do que o documento afirma). Nesse segundo caso NAO
-# FAZ SENTIDO travar o fluxo esperando um numero que nunca vai bater -
-# o lider reconfere pacote a pacote e, se continuar diferente, registra
-# uma RESSALVA (texto explicando + opcionalmente uma foto do proprio
-# Manifested) pra seguir mesmo assim, em vez de ficar preso.
-def monta_texto_ressalva_padrao(node, manifested, fisico):
-    """Texto padrao da ressalva, ja preenchido com os numeros - o
-    lider pode editar antes de confirmar (ver tela_recebimento em
-    app.py)."""
-    return (
-        f"A quantidade de pacotes manifestada para o {node} veio a menos que o "
-        "informado. Foi feita uma nova indução pacote a pacote para validar o físico "
-        "x sistema e, ainda assim, o número se manteve. Segue a quantidade do "
-        "Manifested e a que veio físico:\n\n"
-        f"{manifested} Manifested\n"
-        f"{fisico} físico"
-    )
-
-
-def monta_texto_copia_mnr(por_rota):
-    """Monta o texto 'empilhado' (um TBR por linha, cada um com ':' no
-    final) dos TBRs que ficaram como possivel MNR no checkpoint mais
-    avancado disponivel de cada rota (STOW, se ja rodou - e so faz
-    sentido de verdade DEPOIS do stow, ver comentario sobre MNR mais
-    acima) - pensado pra:
-
-      1. Mostrar num st.code() com icone de copiar (mesmo padrao ja
-         usado na Etapa 1 do Fechamento), pro lider copiar a lista
-         inteira de uma vez.
-      2. Vir pre-preenchido na caixa de texto da ressalva final, pro
-         lider so completar a analise depois de cada ':'.
-
-    Ajuste do Samuel em 24/09/2026: substitui a aba 'Pendentes' que
-    existia no Excel - em vez de so listar os TBR num Excel a parte
-    (sem espaco pra explicar o motivo de cada um), agora o proprio
-    lider detalha a analise de cada TBR na ressalva.
-
-    So considera rotas que ja tem 'situacao_stow' (rota sem stow ainda
-    nao entra aqui - nao faz sentido cobrar analise de MNR de quem
-    ainda nem chegou nessa etapa). Devolve "" se nenhuma rota tiver
-    stow ainda."""
-    nao_carregado, nao_manifestado, sem_state = [], [], []
-    for info in por_rota.values():
-        sit = info.get("situacao_stow")
-        if not sit:
-            continue
-        nao_carregado += sit["manifested"]
-        nao_manifestado += sit["nao_encontrado"]
-        sem_state += sit["sem_state"]
-
-    blocos = []
-    if nao_carregado:
-        blocos.append(f"{ROTULO_MNR_NAO_CARREGADO}:\n" + "\n".join(f"{tbr}: " for tbr in nao_carregado))
-    if nao_manifestado:
-        blocos.append(f"{ROTULO_MNR_NAO_MANIFESTADO}:\n" + "\n".join(f"{tbr}: " for tbr in nao_manifestado))
-    if sem_state:
-        blocos.append("Achado no CSV mas sem State:\n" + "\n".join(f"{tbr}: " for tbr in sem_state))
-    return "\n\n".join(blocos)
+# Desde 08/10/2026 (pedido do Samuel) a ressalva é só uma caixa de texto
+# + fotos/documentos que o usuário preenche se quiser - sem texto padrão
+# de "veio a menos que o Manifested" (a contagem física saiu do fluxo) e
+# sem lista pré-preenchida de possíveis MNR (ninguém precisa justificar
+# todos os TBR que não entraram em stow).
 
 
 _PADRAO_LINHA_NOTA_TBR = re.compile(r"^\s*(TBR\d+)\s*:\s*(.*)$")
@@ -534,10 +448,9 @@ _PADRAO_LINHA_NOTA_TBR = re.compile(r"^\s*(TBR\d+)\s*:\s*(.*)$")
 
 def extrai_notas_ressalva_por_tbr(texto):
     """Lê o texto da ressalva (já escrito pelo líder, no formato
-    empilhado 'TBR123: explicação' que monta_texto_copia_mnr pré-
-    preenche) e devolve um dict tbr -> nota, só com os TBR que o líder
-    realmente completou (ignora 'TBR123: ' vazio, que é só o padrão
-    ainda não preenchido).
+    'TBR123: explicação', uma linha por TBR) e devolve um dict tbr ->
+    nota, só com os TBR que o líder realmente completou (ignora
+    'TBR123: ' com texto vazio).
 
     Ajuste do Samuel em 25/09/2026: no card 'Ver TBRs / endereços' da
     tela, ele NÃO quer só o rótulo genérico de status (tipo 'Possível
@@ -579,7 +492,7 @@ def _estima_altura_linha_ressalva(texto, largura_caracteres=95, altura_por_linha
     return max(linhas * altura_por_linha + 20, minimo)
 
 
-def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_chegou=None):
+def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None):
     """Monta o Excel final: aba 'Resumo' (pacotes/paradas/Em Stow por
     rota, com total no fim) + aba 'Detalhe paradas' (todos os TBR da
     rota, ver comentario grande no topo do arquivo sobre a regra usada
@@ -594,29 +507,19 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
     "Em Stow" de quem ainda nem foi induzido). A aba 'Pendentes' (que
     listava TBR x situação, sem espaço pra análise) foi REMOVIDA - o
     detalhe de cada possível MNR agora fica na aba 'Ressalvas', escrito
-    pelo próprio líder (ver monta_texto_copia_mnr, chamada em
-    app.py na tela, que monta a lista pra copiar/colar nessa ressalva).
+    pelo próprio líder, se ele quiser (desde 08/10/2026 sem lista
+    pré-preenchida e sem a linha "Recebido: N pacotes" - a contagem
+    física saiu do fluxo).
 
     ressalvas: lista opcional de dicts {"checkpoint": str, "texto": str,
     "fotos": [(nome, bytes), ...]} - vira uma aba 'Ressalvas' com o
     texto e CADA foto/documento embutido (0, 1 ou varias - ajuste do
     Samuel em 24/09/2026: antes era só 1 foto, agora aceita várias -
     foto do Manifested/Bill of Lading, foto de avaria, etc., tudo no
-    mesmo registro), pra registro/auditoria (ver
-    monta_texto_ressalva_padrao e monta_texto_copia_mnr). Ajuste
+    mesmo registro), pra registro/auditoria. Ajuste
     também em 24/09/2026: a ressalva virou um registro SÓ, feito no
     final (depois do checkpoint de stow), em vez de uma por checkpoint -
-    ver tela_recebimento() em app.py.
-
-    qtd_chegou: int opcional - a quantidade fisica digitada (contagem do
-    turno inteiro). Ate 23/09/2026 isso era separado por hub (REC9/
-    FOR3), mas o Samuel pediu pra tirar essa separacao em 24/09/2026: a
-    coluna "Source" do CSV do SCC nao e um rotulo fixo de hub de origem
-    (e o local do ULTIMO SCAN - um TBR ja Delivered aparece com Source
-    "CUSTOMER_ADDRESS", nao o hub de onde saiu), entao nao da pra
-    confiar nela pra separar automaticamente REC9 de FOR3 - virou um
-    numero unico de novo, registrado como uma linha logo abaixo do
-    titulo."""
+    ver tela_recebimento() em app.py."""
     tem_stow_real = any("situacao_stow" in info for info in por_rota.values())
 
     wb = openpyxl.Workbook()
@@ -626,9 +529,6 @@ def gera_workbook_recebimento(por_rota, node, data_arquivo, ressalvas=None, qtd_
     titulo = f"Painel Recebimento - {node or '?'} - {data_arquivo.strftime('%d/%m/%Y') if data_arquivo else '?'}"
     ws.append([titulo])
     ws["A1"].font = Font(bold=True, size=13)
-    if qtd_chegou:
-        ws.append([f"Recebido: {qtd_chegou} pacotes"])
-        ws[f"A{ws.max_row}"].font = Font(italic=True)
     ws.append([])
     cabecalho = ["Rota", "Pacotes", "Paradas"]
     if tem_stow_real:
