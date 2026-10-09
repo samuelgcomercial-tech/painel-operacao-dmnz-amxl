@@ -275,38 +275,26 @@ def tela_home_fechamento():
         "Seu nome",
         value=st.session_state.nome_usuario,
         placeholder="Ex: Samuel",
-        help="Fica registrado nas edições (Editar TBR / Editar Reversa), pra saber quem mexeu em quê. Não precisa de senha.",
+        help="Fica registrado no fechamento, pra saber quem mexeu. Não precisa de senha.",
     )
     st.caption(f"Data: {dt.date.today().strftime('%d/%m/%Y')}")
 
     st.divider()
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button(
-            "▶️ Iniciar",
-            use_container_width=True,
-            type="primary",
-            help="Fluxo normal, do zero: subir rotas → lista pro SCC → subir CSV → gerar fechamento.",
-        ):
-            if not st.session_state.nome_usuario.strip():
-                st.warning("Digita seu nome antes de continuar.")
-            else:
-                vai_para("etapa1")
-                st.rerun()
-        st.button(
-            "🔁 Reprocessar CSV SCC",
-            use_container_width=True,
-            disabled=True,
-            help="Ainda não construído — em breve. Pra quando já rodou o Iniciar mas precisa "
-            "subir um CSV corrigido (ou reaproveitar uma edição de TBR/Reversa) e gerar o "
-            "fechamento de novo, sem refazer a consolidação de rotas do zero.",
-        )
-    with col2:
-        st.button("✏️ Editar TBR", use_container_width=True, disabled=True,
-                   help="Ainda não construído — em breve.")
-        st.button("🔄 Editar Reversa", use_container_width=True, disabled=True,
-                   help="Ainda não construído — em breve.")
+    # Removidos em 09/10/2026 (decisão do Samuel: não vai criar esses
+    # fluxos): "Reprocessar CSV SCC", "Editar TBR" e "Editar Reversa" -
+    # eram só botões desativados. Sobrou o Iniciar, que é o fluxo real.
+    if st.button(
+        "▶️ Iniciar",
+        use_container_width=True,
+        type="primary",
+        help="Fluxo normal, do zero: subir rotas → lista pro SCC → subir CSV → gerar fechamento.",
+    ):
+        if not st.session_state.nome_usuario.strip():
+            st.warning("Digita seu nome antes de continuar.")
+        else:
+            vai_para("etapa1")
+            st.rerun()
 
     st.divider()
     if st.button("⚙️ Parceiros cadastrados", use_container_width=True):
