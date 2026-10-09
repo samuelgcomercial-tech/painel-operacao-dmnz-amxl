@@ -1857,7 +1857,7 @@ if not st.session_state.autenticado:
     # layout="wide", então sem isso os campos esticam na largura toda e
     # cobrem a imagem de fundo) e os campos ficam levemente transparentes
     # pra imagem aparecer por trás. No computador a caixa vai pro lado
-    # direito (o logo LRN9 fica no centro da imagem e não pode ser coberto);
+    # esquerdo (o logo LRN9 fica no centro da imagem e não pode ser coberto);
     # no celular fica centralizada. Não afeta as outras telas.
     try:
         _tema_login = st.context.theme.type
@@ -1878,14 +1878,17 @@ if not st.session_state.autenticado:
         f"""
         <style>
         [data-testid="stMainBlockContainer"], .block-container {{
-            max-width: 360px !important;
+            max-width: 320px !important;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
             margin-left: auto !important;
             margin-right: auto !important;
             padding-top: 14vh !important;
         }}
         @media (min-width: 900px) {{
             [data-testid="stMainBlockContainer"], .block-container {{
-                margin-right: 7vw !important;
+                margin-left: 5vw !important;
+                margin-right: auto !important;
             }}
         }}
         [data-testid="stMainBlockContainer"] h1 {{ font-size: 1.4rem !important; }}
