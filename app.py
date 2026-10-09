@@ -1853,6 +1853,57 @@ if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
 if not st.session_state.autenticado:
+    # Só na tela de login: o conteúdo vira uma coluna estreita (o app é
+    # layout="wide", então sem isso os campos esticam na largura toda e
+    # cobrem a imagem de fundo) e os campos ficam levemente transparentes
+    # pra imagem aparecer por trás. No computador a caixa vai pro lado
+    # direito (o logo LRN9 fica no centro da imagem e não pode ser coberto);
+    # no celular fica centralizada. Não afeta as outras telas.
+    try:
+        _tema_login = st.context.theme.type
+    except Exception:
+        _tema_login = None
+    _campo_claro = "rgba(255, 255, 255, 0.45)"
+    _campo_escuro = "rgba(20, 24, 38, 0.50)"
+    _campo = _campo_escuro if _tema_login == "dark" else _campo_claro
+    _campo_extra = (
+        "@media (prefers-color-scheme: dark) { "
+        "[data-testid=\"stTextInput\"] div[data-baseweb=\"input\"], "
+        "[data-testid=\"stTextInput\"] div[data-baseweb=\"base-input\"], "
+        "[data-testid=\"stTextInput\"] input "
+        f"{{ background-color: {_campo_escuro} !important; }} }}"
+        if _tema_login not in ("dark", "light") else ""
+    )
+    st.markdown(
+        f"""
+        <style>
+        [data-testid="stMainBlockContainer"], .block-container {{
+            max-width: 360px !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
+            padding-top: 14vh !important;
+        }}
+        @media (min-width: 900px) {{
+            [data-testid="stMainBlockContainer"], .block-container {{
+                margin-right: 7vw !important;
+            }}
+        }}
+        [data-testid="stMainBlockContainer"] h1 {{ font-size: 1.4rem !important; }}
+        [data-testid="stTextInput"] div[data-baseweb="input"],
+        [data-testid="stTextInput"] div[data-baseweb="base-input"],
+        [data-testid="stTextInput"] input {{
+            background-color: {_campo} !important;
+        }}
+        [data-testid="stTextInput"] div[data-baseweb="input"] {{
+            backdrop-filter: blur(3px);
+            -webkit-backdrop-filter: blur(3px);
+            border-radius: 8px;
+        }}
+        {_campo_extra}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.title("📦 Painel Operação DMNZ - AMXL")
     st.caption("Acesso restrito — entra com usuário e senha.")
     usuario_digitado = st.text_input("Usuário")
