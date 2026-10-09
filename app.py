@@ -16,8 +16,10 @@ historico no GitHub) entra depois, em cima disso - sem redesenhar do
 zero de novo.
 """
 
+import base64
 import datetime as dt
 import hashlib
+import os
 
 import streamlit as st
 
@@ -98,6 +100,73 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# ------------------------------------------------------------------
+# FUNDO DO APP (pedido do Samuel em 09/10/2026): imagem LRN9 atrás de
+# TODAS as telas (login, home, processamento, painéis). Fica aqui no topo
+# do script, antes do login, justamente pra valer pra tudo - é só CSS no
+# próprio .stApp (nada de ::before/z-index, que já quebrou a caixa de
+# login no robô do SSW). A imagem é clara/pastel (feita pra tema claro),
+# então vai com um "véu" por cima pra o texto continuar legível: branco
+# leve no tema claro, escuro mais forte no tema escuro. Se o arquivo
+# fundo_lrn9.jpg não estiver no repositório, o app abre normal, só com o
+# fundo liso do Streamlit (não é erro).
+# ------------------------------------------------------------------
+ARQUIVO_FUNDO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fundo_lrn9.jpg")
+VEU_TEMA_CLARO = "rgba(255, 255, 255, 0.40)"
+VEU_TEMA_ESCURO = "rgba(10, 14, 26, 0.74)"
+
+
+@st.cache_resource
+def _fundo_base64():
+    try:
+        with open(ARQUIVO_FUNDO, "rb") as f:
+            return base64.b64encode(f.read()).decode("ascii")
+    except OSError:
+        return None
+
+
+def aplica_fundo():
+    b64 = _fundo_base64()
+    if not b64:
+        return
+    # st.context.theme.type diz o tema que o Streamlit está usando de
+    # verdade ("light"/"dark"); se não der pra saber (versão antiga),
+    # cai no tema do aparelho via prefers-color-scheme.
+    try:
+        tipo = st.context.theme.type
+    except Exception:
+        tipo = None
+    if tipo == "dark":
+        veu, regra_extra = VEU_TEMA_ESCURO, ""
+    elif tipo == "light":
+        veu, regra_extra = VEU_TEMA_CLARO, ""
+    else:
+        veu = VEU_TEMA_CLARO
+        regra_extra = (
+            "@media (prefers-color-scheme: dark) { [data-testid=\"stApp\"], .stApp { "
+            f"background-image: linear-gradient({VEU_TEMA_ESCURO}, {VEU_TEMA_ESCURO}), "
+            f"url(\"data:image/jpeg;base64,{b64}\") !important; }} }}"
+        )
+    st.markdown(
+        f"""
+        <style>
+        [data-testid="stApp"], .stApp {{
+            background-image: linear-gradient({veu}, {veu}), url("data:image/jpeg;base64,{b64}");
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+        }}
+        [data-testid="stHeader"] {{ background: transparent !important; }}
+        {regra_extra}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+aplica_fundo()
 
 # ------------------------------------------------------------------
 # ESTADO DA SESSAO
